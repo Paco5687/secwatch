@@ -47,10 +47,12 @@ def add(conn, ip, rule="manual", reason="", ttl_hours=None, banned_by="auto"):
     conn.commit()
     write_file(conn)
     log.info("banned %s (%s) for %.1fh", ip, rule, ttl / 3600)
-    # share upstream (opt-in) — but never re-report community-sourced bans (loop)
-    if banned_by != "community":
-        from . import crowd
+    # propagate to other sources — but never re-share a ban we RECEIVED from a
+    # peer or the community (loop prevention).
+    if banned_by != "community" and not banned_by.startswith("cluster"):
+        from . import crowd, cluster
         crowd.report(ip, rule)
+        cluster.queue_ban(ip, rule, reason, now + ttl)   # no-op unless clustered
     return True, "banned"
 
 

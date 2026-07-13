@@ -14,8 +14,8 @@ from fastapi import Body, FastAPI, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import (__version__, alert, auth, auditwatch, authwatch, ban, config,
-               cvewatch, db, detect, dockerwatch, fimwatch, healthwatch,
+from . import (__version__, alert, auth, auditwatch, authwatch, ban, cluster,
+               config, cvewatch, db, detect, dockerwatch, fimwatch, healthwatch,
                hostwatch, llm_analysis, logsources, parser, procwatch, tailer)
 
 log = logging.getLogger("secwatch.web")
@@ -145,6 +145,35 @@ async def crowd_task():
                         conn.close()
         except Exception as exc:
             log.error("crowd task: %s", exc)
+
+
+async def cluster_task():
+    """P2P gossip cycle: push queued bans, converge membership, pull peer
+    blocklists. No-op unless this node is a cluster peer/leaf."""
+    if not config.CLUSTER_ENABLED:
+        return
+    log.info("cluster: role=%s, %d peer(s)", config.CLUSTER_ROLE,
+             len(cluster.load_peers()))
+    while True:
+        await asyncio.sleep(config.CLUSTER_GOSSIP_SECS)
+        try:
+            await asyncio.to_thread(cluster.tick)
+        except Exception as exc:
+            log.error("cluster tick: %s", exc)
+
+
+async def leaf_forward_task():
+    """A leaf isn't queryable, so it pushes a copy of its own events to a peer so
+    they appear in the cluster view. Peers use federated pull instead."""
+    if not config.CLUSTER_ENABLED or config.CLUSTER_ROLE != "leaf":
+        return
+    last_id = await asyncio.to_thread(cluster.current_max_event_id)  # only new events
+    while True:
+        await asyncio.sleep(15)
+        try:
+            last_id = await asyncio.to_thread(cluster.push_events_since, last_id)
+        except Exception as exc:
+            log.error("leaf forward: %s", exc)
 
 
 async def edge_silence_task(engine):
@@ -287,6 +316,8 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(edge_silence_task(engine), name="edge_silence"),
         asyncio.create_task(healthwatch.HealthWatcher(engine, conn).run(), name="health"),
         asyncio.create_task(crowd_task(), name="crowd"),
+        asyncio.create_task(cluster_task(), name="cluster"),
+        asyncio.create_task(leaf_forward_task(), name="cluster_leaf"),
     ]
     if config.MODE == "all":
         tasks += [
@@ -348,7 +379,8 @@ async def _auth_gate(request: Request, call_next):
     if not config.AUTH_ENABLED:
         return await call_next(request)
     path = request.url.path
-    if path in _AUTH_OPEN_PATHS:
+    # cluster RPCs authenticate via HMAC (shared secret), not the dashboard login
+    if path in _AUTH_OPEN_PATHS or path.startswith("/api/cluster/"):
         return await call_next(request)
     # a fronting proxy that already authenticated the user (e.g. localhost)
     if _source_trusted(request.client.host if request.client else ""):
@@ -483,7 +515,8 @@ def _rule_category(rule):
 def events(hours: int = Query(24, ge=1, le=336),
            severity: str = Query("", pattern="^(|info|low|medium|high)$"),
            ip: str = Query(""), rule: str = Query(""), q: str = Query(""),
-           cat: str = Query(""), limit: int = Query(200, ge=1, le=1000)):
+           cat: str = Query(""), device: str = Query(""),
+           limit: int = Query(200, ge=1, le=1000)):
     conn = db.connect(readonly=True)
     try:
         sql = "SELECT * FROM events WHERE ts >= ?"
@@ -497,6 +530,9 @@ def events(hours: int = Query(24, ge=1, le=336),
         if rule:
             sql += " AND rule = ?"
             params.append(rule)
+        if device:
+            sql += " AND device = ?"
+            params.append(device)
         if q:
             sql += " AND (path LIKE ? OR detail LIKE ? OR host LIKE ? OR rule LIKE ?)"
             params += [f"%{q}%"] * 4
@@ -637,7 +673,8 @@ async def ingest(request: Request, payload: dict = Body(...)):
         return Response('{"detail":"not ready"}', status_code=503,
                         media_type="application/json")
     rec = {"host": payload.get("host", ""), "path": payload.get("path", ""),
-           "ua": payload.get("ua", "")}
+           "ua": payload.get("ua", ""),
+           "device": payload.get("device") or "agent"}   # which box reported it
     eng._event(payload.get("ts") or time.time(), payload.get("ip", "-"),
                payload["rule"], payload.get("severity", "info"), rec,
                payload.get("detail", ""), count=payload.get("count", 1))
@@ -810,6 +847,8 @@ def uiconfig():
         "cve": config.CVE_SCAN,
         "crowd": config.CROWD_ENABLED,
         "audit": config.AUDIT_ENABLED,
+        "cluster": config.CLUSTER_ENABLED,
+        "cluster_role": config.CLUSTER_ROLE,
         "mode": config.MODE,
         "ban_actuator": config.BAN_ACTUATOR,
         "autoban": config.AUTOBAN,
@@ -922,6 +961,188 @@ async def ipinfo(ip: str = Query(..., min_length=3, max_length=64)):
     except (OSError, asyncio.TimeoutError):
         out["rdns"] = ""
     return out
+
+
+async def _cluster_auth(request: Request):
+    """Verify an inter-node cluster request (HMAC over the raw body). Returns
+    (payload, None) on success or (None, error_Response)."""
+    if not cluster.secret():
+        return None, Response('{"detail":"cluster not initialized"}', status_code=403,
+                              media_type="application/json")
+    body = await request.body()
+    if not cluster.verify(request.headers.get("x-secwatch-cluster-ts", ""),
+                          request.headers.get("x-secwatch-cluster-sig", ""), body):
+        return None, Response('{"detail":"bad cluster signature"}', status_code=403,
+                              media_type="application/json")
+    try:
+        return (json.loads(body or b"{}"), None)
+    except ValueError:
+        return {}, None
+
+
+@app.post("/api/cluster/ping")
+async def cluster_ping(request: Request):
+    payload, err = await _cluster_auth(request)
+    if err:
+        return err
+    return {"ok": True, "node": cluster.node_identity(), "version": __version__}
+
+
+@app.post("/api/cluster/join")
+async def cluster_join(request: Request):
+    payload, err = await _cluster_auth(request)
+    if err:
+        return err
+    node = payload.get("node") or {}
+    if node.get("name"):
+        cluster.add_peer(node["name"], node.get("url", ""), node.get("role", "peer"))
+        log.info("cluster: node %r (%s) joined", node["name"], node.get("role"))
+    # hand back our identity + roster so the joiner learns the rest of the cluster
+    return {"node": cluster.node_identity(),
+            "peers": [{"name": p["name"], "url": p.get("url", ""),
+                       "role": p.get("role", "peer")} for p in cluster.load_peers()]}
+
+
+@app.post("/api/cluster/roster")
+async def cluster_roster(request: Request):
+    payload, err = await _cluster_auth(request)
+    if err:
+        return err
+    cluster.merge_roster(payload.get("peers"))
+    return {"node": cluster.node_identity(),
+            "peers": [{"name": p["name"], "url": p.get("url", ""),
+                       "role": p.get("role", "peer")} for p in cluster.load_peers()]}
+
+
+@app.post("/api/cluster/ban")
+async def cluster_ban(request: Request):
+    """Receive pushed bans from a peer and enforce them locally (record-only —
+    ban.add refuses trusted/exempt IPs, so a poisoned entry can't hit a legit IP)."""
+    payload, err = await _cluster_auth(request)
+    if err:
+        return err
+    conn = db.connect()
+    try:
+        n = cluster._apply_remote_bans(conn, payload.get("bans", []),
+                                       request.headers.get("x-secwatch-node", "peer"))
+    finally:
+        conn.close()
+    return {"ok": True, "applied": n}
+
+
+@app.post("/api/cluster/blocklist")
+async def cluster_blocklist(request: Request):
+    """Serve this node's active bans so a peer (or firewalled leaf) can pull them."""
+    _, err = await _cluster_auth(request)
+    if err:
+        return err
+    conn = db.connect(readonly=True)
+    try:
+        return {"bans": cluster.local_blocklist(conn)}
+    finally:
+        conn.close()
+
+
+@app.post("/api/cluster/event")
+async def cluster_event(request: Request):
+    """Receive a leaf's already-handled events for the cluster view (record-only)."""
+    payload, err = await _cluster_auth(request)
+    if err:
+        return err
+    eng = getattr(app.state, "engine", None)
+    origin = request.headers.get("x-secwatch-node", "peer")
+    if eng is not None:
+        for e in payload.get("events", []):
+            rec = {"host": e.get("host", ""), "path": e.get("path", ""),
+                   "ua": e.get("ua", ""), "device": e.get("device") or origin}
+            eng._event(e.get("ts") or time.time(), e.get("ip", "-"),
+                       e.get("rule", "event"), e.get("severity", "info"), rec,
+                       e.get("detail", ""), count=e.get("count", 1), record_only=True)
+        eng.maybe_flush(force=True)
+    return {"ok": True}
+
+
+@app.post("/api/cluster/query")
+async def cluster_query(request: Request):
+    """A peer's own stats for the federated cluster view (roster + activity)."""
+    _, err = await _cluster_auth(request)
+    if err:
+        return err
+    return _node_stats()
+
+
+def _node_stats():
+    conn = db.connect(readonly=True)
+    try:
+        now = time.time()
+        since = now - 24 * 3600
+        ev = conn.execute("SELECT COUNT(*) c, SUM(CASE WHEN severity='high' THEN 1 "
+                          "ELSE 0 END) h FROM events WHERE ts >= ?", (since,)).fetchone()
+        bans = conn.execute("SELECT COUNT(*) c FROM bans WHERE expires > ?",
+                            (now,)).fetchone()["c"]
+        self_row = conn.execute("SELECT last_seen FROM devices WHERE is_self=1 "
+                                "ORDER BY last_seen DESC LIMIT 1").fetchone()
+        return {"node": cluster.node_identity(),
+                "events_24h": ev["c"] or 0, "high_24h": ev["h"] or 0, "bans": bans,
+                "last_seen": self_row["last_seen"] if self_row else now}
+    finally:
+        conn.close()
+
+
+@app.get("/api/cluster/overview")
+async def cluster_overview():
+    """Dashboard-facing (not HMAC): assemble the whole cluster from this node's
+    view by fanning out to reachable peers. Works from ANY peer."""
+    if not config.CLUSTER_ENABLED:
+        return {"enabled": False, "role": config.CLUSTER_ROLE}
+    nodes = [dict(_node_stats(), self=True, online=True)]
+    peers = cluster.queryable_peers()
+
+    async def _q(p):
+        try:
+            r = await asyncio.to_thread(cluster.peer_request, p["url"], "/api/cluster/query", {})
+            return dict(r, self=False, online=True)
+        except Exception:
+            return {"node": {"name": p["name"], "role": p.get("role", "peer"),
+                             "url": p.get("url", "")}, "online": False, "self": False,
+                    "events_24h": 0, "high_24h": 0, "bans": 0}
+    nodes += await asyncio.gather(*[_q(p) for p in peers])
+    # leaves aren't queryable — list them from the roster so they're visible
+    seen = {n["node"]["name"] for n in nodes}
+    for p in cluster.load_peers():
+        if p.get("role") == "leaf" and p["name"] not in seen:
+            nodes.append({"node": {"name": p["name"], "role": "leaf", "url": ""},
+                          "online": None, "self": False, "events_24h": 0,
+                          "high_24h": 0, "bans": 0, "note": "leaf (push-only)"})
+    return {"enabled": True, "role": config.CLUSTER_ROLE, "self": config.CLUSTER_NAME,
+            "nodes": nodes}
+
+
+@app.get("/api/devices")
+def devices(hours: int = Query(24, ge=1, le=336)):
+    """Fleet roster: this core + any reporting agents, with liveness + activity."""
+    conn = db.connect(readonly=True)
+    try:
+        now = time.time()
+        since = now - hours * 3600
+        counts = {r["device"]: r for r in conn.execute(
+            "SELECT device, COUNT(*) events, "
+            "SUM(CASE WHEN severity='high' THEN 1 ELSE 0 END) highs "
+            "FROM events WHERE ts >= ? AND device IS NOT NULL GROUP BY device",
+            (since,))}
+        rows = []
+        for r in conn.execute("SELECT * FROM devices ORDER BY is_self DESC, device"):
+            c = counts.get(r["device"])
+            rows.append({
+                "device": r["device"], "is_self": bool(r["is_self"]),
+                "first_seen": r["first_seen"], "last_seen": r["last_seen"],
+                "online": (now - r["last_seen"]) < 600,   # reported within 10 min
+                "events": c["events"] if c else 0,
+                "highs": (c["highs"] or 0) if c else 0,
+            })
+        return {"devices": rows, "count": len(rows), "self": config.DEVICE}
+    finally:
+        conn.close()
 
 
 @app.get("/api/health")

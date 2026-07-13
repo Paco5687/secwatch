@@ -14,10 +14,19 @@ CREATE TABLE IF NOT EXISTS events(
   ua TEXT,
   detail TEXT,
   count INTEGER DEFAULT 1,
-  alerted INTEGER DEFAULT 0
+  alerted INTEGER DEFAULT 0,
+  device TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
 CREATE INDEX IF NOT EXISTS idx_events_ip ON events(ip);
+
+-- fleet roster: one row per reporting device (this core + any agents)
+CREATE TABLE IF NOT EXISTS devices(
+  device TEXT PRIMARY KEY,
+  first_seen REAL NOT NULL,
+  last_seen REAL NOT NULL,
+  is_self INTEGER DEFAULT 0
+);
 
 CREATE TABLE IF NOT EXISTS traffic(
   minute INTEGER PRIMARY KEY,
@@ -100,8 +109,20 @@ def connect(readonly: bool = False) -> sqlite3.Connection:
         conn = sqlite3.connect(config.DB_PATH, timeout=10)
         conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript(SCHEMA)
+        _migrate(conn)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def _migrate(conn):
+    """Additive migrations for DBs created before a column existed. Runs AFTER
+    the CREATE TABLE IF NOT EXISTS statements, so index creation on new columns
+    must live here (not in SCHEMA) — the column may not exist on an old table yet."""
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(events)")}
+    if "device" not in cols:   # pre-fleet DB
+        conn.execute("ALTER TABLE events ADD COLUMN device TEXT")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_events_device ON events(device)")
+    conn.commit()
 
 
 def meta_get(conn, key, default=None):

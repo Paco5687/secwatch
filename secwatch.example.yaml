@@ -54,6 +54,19 @@ proxy:
   traefik_dynamic_dir: /srv/YOUR_APP/infra/traefik/dynamic
   bans_file: /srv/YOUR_APP/infra/traefik/dynamic/secwatch-bans.yml
 
+# Cluster (P2P fleet, optional) — join several secwatch nodes so they gossip
+# bans (a hit on one hardens all) and you can view the fleet from any peer. No
+# central hub; every node stays autonomous. Set the role, then form the cluster
+# with the CLI: `python -m secwatch.cluster init` on the first node, then
+# `python -m secwatch.cluster join http://FIRST-NODE:8931 '<secret>'` on the rest.
+cluster:
+  role: standalone          # standalone (default) | peer | leaf
+  # peer — full member: shares bans, viewable by peers, reads peers (internal/trusted)
+  # leaf — push-only for EXPOSED boxes: contributes bans+events, pulls the blocklist,
+  #        but isn't queryable and can't read peers (outbound-only → port can stay firewalled)
+  url: ""                   # http://THIS-NODE:8931 — how peers reach this node (a leaf can omit it)
+  # gossip_secs: 60         # how often bans/roster converge
+
 # How a ban is enforced (ban-actuator adapter):
 #   traefik  — write a ClientIP deny router file (needs proxy.bans_file)
 #   nftables — maintain an nft set dropped in the input chain (needs root)

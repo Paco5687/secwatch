@@ -114,6 +114,28 @@ that matter. Those still ban + show on the dashboard; tune what's quiet with
 `alerting.quiet_rules` (a probe from an internal IP still alerts). Full details in
 the [Wiki](https://github.com/Paco5687/secwatch/wiki/Alerting).
 
+## Cluster (fleet)
+
+Run secwatch on several boxes and join them into a **peer-to-peer cluster** — no
+central hub. Every node stays fully autonomous (it detects + bans *itself*), and
+nodes gossip bans so **a hit on one hardens all**, while any peer can view the
+whole fleet. Membership is by explicit join with a shared secret (never
+auto-discovery), and inter-node requests are HMAC-signed.
+
+```bash
+# on the first node:
+python -m secwatch.cluster init          # prints the shared secret
+# on each other node (set cluster.role in secwatch.yaml first, then):
+python -m secwatch.cluster join http://FIRST-NODE:8931 '<secret>'
+```
+
+Roles (config `cluster.role`): **peer** — full member (shares bans, viewable,
+reads peers); **leaf** — push-only for exposed/less-trusted boxes (contributes
+its bans + events and pulls the blocklist, but isn't queryable and can't read
+peers, so a compromised edge box can't recon or poison the cluster). A leaf only
+makes *outbound* connections, so its port can stay firewalled. See the
+[Cluster wiki page](https://github.com/Paco5687/secwatch/wiki/Cluster).
+
 ## Deploying with Docker
 
 ```bash

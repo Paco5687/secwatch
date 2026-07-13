@@ -8,6 +8,7 @@ so the code is portable and shareable. See `secwatch.example.yaml`.
 """
 import json
 import os
+import socket
 from pathlib import Path
 
 import yaml
@@ -155,9 +156,34 @@ LISTEN_PORT = int(os.environ.get("SECWATCH_PORT", "8931"))
 #   agent — ONLY host collectors (auth/host/persistence/process/docker); forwards
 #           events to a core over HTTP (runs on the host, feeds a container core)
 MODE = _s("SECWATCH_MODE", "mode", "all")
+# Fleet identity: the label this instance stamps on the events it reports (its own,
+# or — in agent mode — the ones it forwards to a core). Defaults to the hostname so
+# a central hub can tell boxes apart. Keep it stable + unique across the fleet.
+DEVICE = _s("SECWATCH_DEVICE", "device.name", socket.gethostname() or "secwatch")
 CORE_URL = os.environ.get("SECWATCH_CORE_URL", "http://127.0.0.1:8931")
 # Shared token for agent→core event ingestion (POST /api/ingest). Empty disables.
-INGEST_TOKEN = os.environ.get("SECWATCH_INGEST_TOKEN", "")
+INGEST_TOKEN = _s("SECWATCH_INGEST_TOKEN", "hub.ingest_token", "")
+
+# ---- cluster (P2P fleet, no central hub) --------------------------------
+# Every node stays fully autonomous (detects + bans ITSELF); nodes gossip bans so
+# a hit on one hardens the rest, and any peer can view the whole cluster. Explicit
+# join (a shared secret), never auto-discovery. Roles are configurable — NOTHING
+# host-specific is baked in:
+#   standalone — not clustered (default)
+#   peer       — full member: shares bans, serves + reads cluster telemetry (trusted)
+#   leaf       — push-only member for exposed/less-trusted boxes: pushes its bans +
+#                events to peers and pulls the cluster blocklist, but is NOT
+#                queryable and does NOT read peers (contains a compromised edge box)
+CLUSTER_ROLE = _s("SECWATCH_CLUSTER_ROLE", "cluster.role", "standalone")
+CLUSTER_ENABLED = CLUSTER_ROLE in ("peer", "leaf")
+CLUSTER_NAME = DEVICE  # a node's cluster identity is its device name
+# The URL peers use to reach THIS node (e.g. http://10.20.0.5:8931). Required for
+# a 'peer' (it gets queried); a 'leaf' can leave it blank (it's push-only).
+CLUSTER_URL = _s("SECWATCH_CLUSTER_URL", "cluster.url", "")
+CLUSTER_STORE = DB_PATH.parent / "cluster.json"     # peer roster (managed by CLI)
+CLUSTER_SECRET_FILE = DB_PATH.parent / "cluster.secret"   # shared secret, chmod 600
+CLUSTER_MAX_CLOCK_SKEW = int(_s(None, "cluster.max_clock_skew", 120))  # HMAC replay window
+CLUSTER_GOSSIP_SECS = int(_s("SECWATCH_CLUSTER_GOSSIP", "cluster.gossip_secs", 60))
 
 # ---- crowd-sourced threat intel (OPT-IN, off by default) ----------------
 # Optionally share confirmed bans (attacker IP + rule + timestamp ONLY — never

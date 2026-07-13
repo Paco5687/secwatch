@@ -259,17 +259,20 @@ VIEWS.overview = {
 async function renderEventTable(params, opts) {
   const hours = hoursSel();
   const q = new URLSearchParams({hours, limit: 400});
-  ["severity", "rule", "ip", "q", "cat"].forEach(k => { const v = params.get(k); if (v) q.set(k, v); });
+  ["severity", "rule", "ip", "q", "cat", "device"].forEach(k => { const v = params.get(k); if (v) q.set(k, v); });
   if (opts.forceCat) q.set("cat", opts.forceCat);
-  const data = await jget(`api/events?${q}`);
+  const [data, fleet] = await Promise.all([jget(`api/events?${q}`), jget("api/devices").catch(() => ({devices: [], count: 0}))]);
   const rules = [...new Set(data.events.map(e => e.rule))].sort();
+  const multi = (fleet.count || 0) > 1;   // only surface device UI on a real fleet
   const rows = data.events.map(e =>
     `<tr><td class="mono" style="white-space:nowrap">${fmtT(e.ts)}</td><td>${chip(e.severity)}</td>` +
     `<td><span class="rulechip" data-rule="${esc(e.rule)}">${esc(e.rule)}</span></td>` +
+    (multi ? `<td><span class="rulechip" data-dev="${esc(e.device || "")}">${esc(e.device || "—")}</span></td>` : "") +
     `<td>${ipLink(e.ip)}</td><td>${esc(e.host)}</td>` +
     `<td class="path" title="${esc(e.path)}">${esc(e.path)}</td>` +
     `<td style="font-size:12.5px;color:var(--ink2)">${esc(e.detail)}${e.alerted ? " 🔔" : ""}</td>` +
     `<td class="mono">${e.count}</td></tr>`).join("");
+  const ncol = multi ? 9 : 8;
 
   $("view").innerHTML =
     `<div class="card">
@@ -282,13 +285,15 @@ async function renderEventTable(params, opts) {
           <option value="">All rules</option>
           ${rules.map(r => `<option ${params.get("rule") === r ? "selected" : ""}>${esc(r)}</option>`).join("")}
         </select>
+        ${multi ? `<select id="fDev"><option value="">All devices</option>${
+          fleet.devices.map(d => `<option ${params.get("device") === d.device ? "selected" : ""}>${esc(d.device)}</option>`).join("")}</select>` : ""}
         <input type="text" id="fQ" placeholder="search path / detail / host…" value="${esc(params.get("q") || "")}">
         ${params.get("cat") && !opts.forceCat ? `<span class="tag">category: ${esc(params.get("cat"))}</span><button id="fClearCat">✕</button>` : ""}
         <span class="rules" style="margin-left:auto">${data.events.length} shown</span>
       </div>
       <div class="tablewrap"><table>
-        <thead><tr><th>Time</th><th>Sev</th><th>Rule</th><th>IP</th><th>Host</th><th>Path</th><th>Detail</th><th>N</th></tr></thead>
-        <tbody>${rows || `<tr><td colspan="8" class="empty">No events match.</td></tr>`}</tbody>
+        <thead><tr><th>Time</th><th>Sev</th><th>Rule</th>${multi ? "<th>Device</th>" : ""}<th>IP</th><th>Host</th><th>Path</th><th>Detail</th><th>N</th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="${ncol}" class="empty">No events match.</td></tr>`}</tbody>
       </table></div>
     </div>`;
 
@@ -300,11 +305,12 @@ async function renderEventTable(params, opts) {
   };
   $("fSev").addEventListener("change", () => upd({severity: $("fSev").value}));
   $("fRule").addEventListener("change", () => upd({rule: $("fRule").value}));
+  const fd = $("fDev"); if (fd) fd.addEventListener("change", () => upd({device: fd.value}));
   let deb;
   $("fQ").addEventListener("input", () => { clearTimeout(deb); deb = setTimeout(() => upd({q: $("fQ").value}), 450); });
   const cc = $("fClearCat"); if (cc) cc.addEventListener("click", () => upd({cat: ""}));
   document.querySelectorAll(".rulechip").forEach(el =>
-    el.addEventListener("click", () => upd({rule: el.dataset.rule})));
+    el.addEventListener("click", () => upd(el.dataset.dev !== undefined ? {device: el.dataset.dev} : {rule: el.dataset.rule})));
 }
 VIEWS.events = { title: "Events", render: p => renderEventTable(p, {viewName: "events"}) };
 VIEWS.host = { title: "Host / EDR", render: p => renderEventTable(p, {viewName: "host", forceCat: p.get("cat") || "host,files"}) };
@@ -564,6 +570,45 @@ VIEWS.system = {
   },
 };
 
+/* ---------- cluster ---------- */
+VIEWS.cluster = {
+  title: "Cluster",
+  async render() {
+    const d = await jget("api/cluster/overview");
+    if (!d.enabled) {
+      $("view").innerHTML = `<div class="card"><div class="empty">This node isn't in a cluster (role: <b>${esc(d.role || "standalone")}</b>).<br><br>
+        Form a P2P cluster so boxes share bans and you can view them all from here:<br>
+        <span class="mono">python -m secwatch.cluster init</span> on the first node, then
+        <span class="mono">python -m secwatch.cluster join &lt;url&gt; &lt;secret&gt;</span> on the others.<br>
+        Set <span class="mono">cluster.role</span> (peer | leaf) in Settings/YAML.</div></div>`;
+      return;
+    }
+    const nodes = d.nodes || [];
+    const dot = n => n.online === false ? `<span class="dot off"></span>`
+      : n.online === null ? `<span class="dot" style="background:var(--muted)"></span>`
+      : `<span class="dot on"></span>`;
+    const cards = nodes.map(n => {
+      const node = n.node || {};
+      const status = n.online === false ? "offline" : n.online === null ? "leaf" : "online";
+      return `<div class="card catcard" style="cursor:default">
+        <div class="catname">${dot(n)}${esc(node.name || "?")} ${n.self ? `<span class="tag">this node</span>` : ""}${node.role === "leaf" ? `<span class="tag">leaf</span>` : ""}</div>
+        <div class="catstate ${n.high_24h ? "st-alert" : "st-secure"}">${status.toUpperCase()}</div>
+        <div class="catsub">${n.events_24h || 0} events · ${n.high_24h || 0} high · ${n.bans || 0} bans (24h)</div>
+      </div>`;
+    }).join("");
+    const totBans = nodes.reduce((a, n) => a + (n.bans || 0), 0);
+    const totHigh = nodes.reduce((a, n) => a + (n.high_24h || 0), 0);
+    $("view").innerHTML =
+      `<div class="card" id="threatBanner">
+         <span class="statuslamp ${totHigh ? "lamp-elevated" : "lamp-low"}"><i></i>${nodes.length} NODE${nodes.length > 1 ? "S" : ""}</span>
+         <div class="headline">P2P cluster · every node defends itself and shares bans. You're viewing from <b>${esc(d.self)}</b>.</div>
+         <div class="quick"><span><b>${nodes.filter(n => n.online !== false).length}</b>reachable</span>
+           <span><b>${totHigh}</b>high (24h)</span><span><b>${totBans}</b>bans</span></div>
+       </div>
+       <div class="catgrid">${cards}</div>`;
+  },
+};
+
 /* ---------- settings ---------- */
 function setControl(f) {
   const ro = f.readonly ? "disabled" : "";
@@ -658,6 +703,7 @@ VIEWS.settings = {
     CFG = await jget("api/uiconfig");
     CFG.mut = CFG.mut_header ? {[CFG.mut_header]: "1"} : {};
     if (!CFG.llm) $("navAnalysis").style.display = "none";
+    if (CFG.cluster) $("navCluster").style.display = "";
     if (CFG.update_available) $("updNote").textContent = "· update available";
   } catch (e) { CFG.mut = {}; }
   await route();

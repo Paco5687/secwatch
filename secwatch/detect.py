@@ -122,6 +122,10 @@ class Engine:
         self._flushed_tail_states = {}
         # per log-source liveness for the dashboard {path: {records, last_ts}}
         self.source_status = {}
+        # fleet identity stamped on this instance's own events (agents override
+        # per-event via rec["device"] when forwarding to a core)
+        self.device = config.DEVICE
+        self._device_seen = {}   # device -> last ts we upserted (throttle roster writes)
         self.last_log_line_ts = 0.0   # updated on every parsed access-log line
         # host -> True (catch-all SPA: 200s any path) / False (real backend).
         # A probe path returning 200 only means "hit" on a real backend; a SPA
@@ -298,7 +302,8 @@ class Engine:
         if self.forward_cb:   # agent mode → ship to the core, don't process locally
             self.forward_cb({"ts": now, "ip": ip or "-", "rule": rule,
                              "severity": severity, "detail": detail, "host": host,
-                             "path": path, "ua": ua, "count": count})
+                             "path": path, "ua": ua, "count": count,
+                             "device": self.device})   # so the hub knows which box
             return
         rec = {"host": host, "path": path, "ua": ua}
         self._event(now, ip or "-", rule, severity, rec, detail, count=count)
@@ -310,14 +315,17 @@ class Engine:
         while dq and dq[0] < cutoff:
             dq.popleft()
 
-    def _event(self, now, ip, rule, severity, rec, detail, count=1):
+    def _event(self, now, ip, rule, severity, rec, detail, count=1, record_only=False):
         key = (ip, rule)
         if self.suppress.get(key, 0) > now:
             return
         self.suppress[key] = now + config.EVENT_SUPPRESS
 
+        # record_only: a peer storing another node's ALREADY-handled event (cluster
+        # view) — insert + attribute it, but never re-alert or re-ban here.
         alert = (
-            config.SEVERITY_RANK[severity]
+            not record_only
+            and config.SEVERITY_RANK[severity]
             >= config.SEVERITY_RANK[config.ALERT_MIN_SEVERITY]
             and self.alert_gate.get(key, 0) <= now
         )
@@ -330,12 +338,14 @@ class Engine:
         if alert:
             self.alert_gate[key] = now + config.ALERT_COOLDOWN
 
+        device = rec.get("device") or self.device
         self.conn.execute(
-            "INSERT INTO events(ts,ip,rule,severity,host,path,ua,detail,count,alerted)"
-            " VALUES(?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO events(ts,ip,rule,severity,host,path,ua,detail,count,alerted,device)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?)",
             (now, ip, rule, severity, rec["host"], rec["path"][:500],
-             rec["ua"][:300], detail, count, int(alert)),
+             rec["ua"][:300], detail, count, int(alert), device),
         )
+        self._touch_device(now, device)
         if alert and self.alert_cb:
             self.alert_cb({
                 "ts": now, "ip": ip, "rule": rule, "severity": severity,
@@ -346,6 +356,17 @@ class Engine:
                 and rule in self.ban_rules and ip and not is_trusted(ip)
                 and (config.AUTOBAN_PRIVATE or not is_private(ip))):
             self.ban_cb(ip, rule, detail)
+
+    def _touch_device(self, now, device):
+        """Upsert the fleet roster (last_seen), throttled to ~30s per device."""
+        if not device or now - self._device_seen.get(device, 0) < 30:
+            return
+        self._device_seen[device] = now
+        self.conn.execute(
+            "INSERT INTO devices(device, first_seen, last_seen, is_self) "
+            "VALUES(?,?,?,?) ON CONFLICT(device) DO UPDATE SET last_seen=excluded.last_seen",
+            (device, now, now, int(device == self.device)),
+        )
 
     def maybe_flush(self, now=None, force=False):
         now = now or time.time()
