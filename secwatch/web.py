@@ -13,7 +13,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from . import (alert, auth, auditwatch, authwatch, ban, config, cvewatch, db,
                detect, dockerwatch, fimwatch, healthwatch, hostwatch,
-               llm_analysis, parser, procwatch, tailer)
+               llm_analysis, logsources, parser, procwatch, tailer)
 
 log = logging.getLogger("secwatch.web")
 
@@ -183,19 +183,28 @@ async def catchall_task(engine):
                          "SPA (probe-200s = noise)" if verdict else "real backend")
 
 
-async def tail_task(engine):
+async def tail_task(engine, source):
+    """Tail one log source (path + format) into the shared engine."""
     conn = engine.conn
-    state = db.meta_get(conn, "tail")
+    key = source["path"]
+    parse = parser.parser_for(source["type"], source.get("regex", ""))
+    st = engine.source_status.setdefault(key, {"records": 0, "last_ts": 0.0})
+    # resume: per-source key, falling back to the legacy 'tail' key for the primary
+    state = db.meta_get(conn, f"tail:{key}")
+    if not state and source.get("primary"):
+        state = db.meta_get(conn, "tail")
     initial = None
     if state and ":" in state:
         ino, off = state.split(":")
         initial = (int(ino), int(off))
-    async for line, ino, off in tailer.follow(config.ACCESS_LOG, initial):
+    async for line, ino, off in tailer.follow(source["path"], initial):
         if line:
-            rec = parser.parse_line(line)
+            rec = parse(line)
             if rec:
                 engine.feed(rec)
-        engine.tail_state = (ino, off)
+                st["records"] += 1
+                st["last_ts"] = time.time()
+        engine.tail_states[key] = (ino, off)
         engine.maybe_flush()
 
 
@@ -231,6 +240,14 @@ async def maintenance_task():
             conn.close()
 
 
+def _watch(task: asyncio.Task):
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc:
+        log.error("background task %r died: %r", task.get_name(), exc, exc_info=exc)
+
+
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
     conn = db.connect()  # shared writer connection, single event loop
@@ -246,19 +263,19 @@ async def lifespan(app: FastAPI):
     engine = detect.Engine(conn, _queue_alert, ban_cb=_ban_cb)
     app.state.engine = engine   # for the login route to emit lockout events
 
-    def _watch(task: asyncio.Task):
-        if task.cancelled():
-            return
-        exc = task.exception()
-        if exc:
-            log.error("background task %r died: %r", task.get_name(), exc,
-                      exc_info=exc)
+    def _spawn_tail(source):
+        task = asyncio.create_task(tail_task(engine, source),
+                                   name=f"tail:{source['name']}")
+        task.add_done_callback(_watch)
+        return task
+
+    manager = logsources.Manager(engine, _spawn_tail)
+    app.state.logsources = manager
 
     # Core always runs edge detection + web/CVE/LLM/alerting + ban. Host-level
     # collectors run here only in "all" mode; in "core" mode they come from a
     # separate agent via /api/ingest (so the core can be an isolated container).
     tasks = [
-        asyncio.create_task(tail_task(engine), name="tail"),
         asyncio.create_task(alert_task(), name="alerts"),
         asyncio.create_task(maintenance_task(), name="maintenance"),
         asyncio.create_task(analysis_task(), name="analysis"),
@@ -282,10 +299,16 @@ async def lifespan(app: FastAPI):
                  config.MODE)
     for t in tasks:
         t.add_done_callback(_watch)
+    # one tail task per configured log source (proxy + internal apps + …),
+    # tracked by the manager so the dashboard can add/remove sources live
+    for src in config.LOG_SOURCES:
+        manager.register(src["path"], _spawn_tail(src))
+    log.info("tailing %d log source(s): %s", len(config.LOG_SOURCES),
+             ", ".join(f"{s['name']}({s['type']})" for s in config.LOG_SOURCES))
     yield
-    for t in tasks:
+    for t in tasks + list(manager.tasks.values()):
         t.cancel()
-    await asyncio.gather(*tasks, return_exceptions=True)
+    await asyncio.gather(*tasks, *manager.tasks.values(), return_exceptions=True)
     conn.close()
 
 
@@ -487,6 +510,42 @@ def unban_ip(payload: dict = Body(...)):
         conn.close()
 
 
+@app.get("/api/logsources")
+def list_logsources():
+    mgr = getattr(app.state, "logsources", None)
+    if mgr is None:
+        return {"sources": [], "types": sorted(logsources.VALID_TYPES)}
+    return {"sources": mgr.status(), "types": sorted(logsources.VALID_TYPES)}
+
+
+@app.post("/api/logsources")
+async def add_logsource(payload: dict = Body(...)):
+    # async so mgr.add() runs on the event loop (it spawns a tail task)
+    mgr = getattr(app.state, "logsources", None)
+    if mgr is None:
+        return {"ok": False, "message": "not ready"}
+    ok, msg = mgr.add(str(payload.get("name", "")), str(payload.get("path", "")),
+                      str(payload.get("type", "traefik")),
+                      str(payload.get("regex", "")))
+    return {"ok": ok, "message": msg}
+
+
+@app.post("/api/logsources/scan")
+async def scan_logsources():
+    """Auto-discover watchable access logs on the host (review queue)."""
+    cands = await asyncio.to_thread(logsources.scan)
+    return {"candidates": cands}
+
+
+@app.post("/api/logsources/remove")
+async def remove_logsource(payload: dict = Body(...)):
+    mgr = getattr(app.state, "logsources", None)
+    if mgr is None:
+        return {"ok": False, "message": "not ready"}
+    ok, msg = mgr.remove(str(payload.get("path", "")))
+    return {"ok": ok, "message": msg}
+
+
 @app.get("/api/vulnerabilities")
 def vulnerabilities():
     conn = db.connect(readonly=True)
@@ -668,6 +727,27 @@ button:hover { color: var(--crit); border-color: var(--crit); }
 .threat-high i, .threat-critical i { background: var(--crit); }
 .threat-high, .threat-critical { color: var(--crit); }
 .analysis-head .when { color: var(--muted); font-size: 12px; }
+#addSourceBtn:hover, .analysis-head #addSourceBtn:hover { color: var(--good); border-color: var(--good); }
+#scanBtn:hover { color: var(--series); border-color: var(--series); }
+.scanrow { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--grid); flex-wrap: wrap; }
+.scanrow:last-child { border-bottom: none; }
+.scanrow .meta { flex: 1; min-width: 240px; }
+.scanrow .samp { font-family: ui-monospace, monospace; font-size: 11px; color: var(--muted);
+                 overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.scanrow button { white-space: nowrap; }
+.scanrow button:hover { color: var(--good); border-color: var(--good); }
+.srcgrid { display: grid; grid-template-columns: 1fr 2fr 1fr; gap: 10px; }
+@media (max-width: 700px) { .srcgrid { grid-template-columns: 1fr; } }
+#addSourceForm label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--ink2); }
+#addSourceForm input, #addSourceForm select {
+  font: inherit; font-size: 13px; color: var(--ink); background: var(--plane);
+  border: 1px solid var(--ring); border-radius: 6px; padding: 5px 8px; width: 100%;
+}
+#addSourceForm code { font-family: ui-monospace, monospace; font-size: 11px; }
+.tag { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+       padding: 1px 6px; border-radius: 5px; background: var(--grid); color: var(--ink2); margin-left: 6px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 5px; }
+.dot.on { background: var(--good); } .dot.off { background: var(--muted); }
 .analysis-head button:hover { color: var(--series); border-color: var(--series); }
 .headline { font-size: 15px; font-weight: 600; margin: 4px 0 6px; }
 .summary { color: var(--ink2); margin-bottom: 12px; }
@@ -737,6 +817,45 @@ footer { color: var(--muted); font-size: 12px; margin-top: 14px; }
     <button id="analyzeBtn">Analyze now</button>
   </div>
   <div id="analysisBody"><div class="empty">No analysis yet — click “Analyze now”.</div></div>
+</div>
+
+<div class="card" id="sourcesCard" style="margin-bottom:12px">
+  <div class="analysis-head">
+    <h2 style="margin:0">Log sources</h2>
+    <span class="when" id="sourcesWhen"></span>
+    <div class="spacer" style="flex:1"></div>
+    <button id="scanBtn">Scan for logs</button>
+    <button id="addSourceBtn">+ Add local app</button>
+  </div>
+  <div style="overflow-x:auto">
+  <table>
+    <thead><tr><th>Name</th><th>Path</th><th>Format</th><th>Lines</th><th>Last activity</th><th></th></tr></thead>
+    <tbody id="sourceRows"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
+  </table>
+  </div>
+  <div id="scanResults" style="display:none;margin-top:12px;border-top:1px solid var(--grid);padding-top:10px"></div>
+  <form id="addSourceForm" style="display:none;margin-top:12px;border-top:1px solid var(--grid);padding-top:12px">
+    <div class="srcgrid">
+      <label>Name<input id="srcName" placeholder="gitea" spellcheck="false"></label>
+      <label>Log file path<input id="srcPath" placeholder="/var/log/nginx/gitea.access.log" spellcheck="false"></label>
+      <label>Format
+        <select id="srcType">
+          <option value="traefik">traefik (JSON)</option>
+          <option value="nginx">nginx (combined)</option>
+          <option value="caddy">caddy (JSON)</option>
+          <option value="regex">regex (custom)</option>
+        </select>
+      </label>
+    </div>
+    <label id="srcRegexWrap" style="display:none;margin-top:8px">Regex (named groups; needs <code>(?P&lt;ip&gt;…)</code>)
+      <input id="srcRegex" placeholder="(?P<ip>\\S+) - \"(?P<method>\\S+) (?P<path>\\S+)[^\"]*\" (?P<status>\\d+) \"(?P<ua>[^\"]*)\"" spellcheck="false">
+    </label>
+    <div style="display:flex;gap:8px;align-items:center;margin-top:10px">
+      <button type="submit" id="srcSave">Add source</button>
+      <button type="button" id="srcCancel">Cancel</button>
+      <span id="srcMsg" class="rules"></span>
+    </div>
+  </form>
 </div>
 
 <div class="grid2">
@@ -965,6 +1084,123 @@ async function loadVulns() {
   } catch (e) { /* leave prior */ }
 }
 
+const fmtAgo = ts => {
+  if (!ts) return "never";
+  const s = Math.max(0, Date.now()/1000 - ts);
+  if (s < 90) return Math.round(s) + "s ago";
+  if (s < 5400) return Math.round(s/60) + "m ago";
+  if (s < 172800) return Math.round(s/3600) + "h ago";
+  return Math.round(s/86400) + "d ago";
+};
+async function loadSources() {
+  try {
+    const d = await fetch("api/logsources").then(r => r.json());
+    const rows = (d.sources || []).map(s => {
+      const live = `<span class="dot ${s.live ? "on" : "off"}"></span>`;
+      const tags = (s.primary ? `<span class="tag">primary</span>` : "") +
+                   (s.managed || s.primary ? "" : `<span class="tag">yaml</span>`);
+      const rm = s.managed
+        ? `<button data-rmsrc="${esc(s.path)}">remove</button>`
+        : `<span class="rules" title="edit secwatch.yaml to change this">—</span>`;
+      return `<tr><td>${live}<b>${esc(s.name)}</b>${tags}</td>` +
+        `<td class="path" title="${esc(s.path)}">${esc(s.path)}</td>` +
+        `<td>${esc(s.type)}</td><td class="n">${(s.records||0).toLocaleString()}</td>` +
+        `<td style="white-space:nowrap">${fmtAgo(s.last_ts)}</td><td>${rm}</td></tr>`;
+    }).join("");
+    $("sourceRows").innerHTML = rows ||
+      `<tr><td colspan="6" class="empty">No sources.</td></tr>`;
+    $("sourcesWhen").textContent = `${(d.sources||[]).length} watched`;
+  } catch (e) { /* leave prior */ }
+}
+$("addSourceBtn").addEventListener("click", () => {
+  const f = $("addSourceForm");
+  f.style.display = f.style.display === "none" ? "block" : "none";
+  $("srcMsg").textContent = "";
+});
+$("srcCancel").addEventListener("click", () => { $("addSourceForm").style.display = "none"; });
+$("srcType").addEventListener("change", () => {
+  $("srcRegexWrap").style.display = $("srcType").value === "regex" ? "flex" : "none";
+});
+$("addSourceForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  $("srcSave").disabled = true;
+  $("srcMsg").textContent = "Adding…";
+  const body = {name: $("srcName").value, path: $("srcPath").value,
+                type: $("srcType").value, regex: $("srcRegex").value};
+  const res = await fetch("api/logsources", {method: "POST",
+    headers: {"Content-Type": "application/json", ...MUT},
+    body: JSON.stringify(body)}).then(r => r.json()).catch(() => ({ok:false, message:"request failed"}));
+  $("srcSave").disabled = false;
+  $("srcMsg").textContent = res.message || (res.ok ? "Added." : "Failed.");
+  $("srcMsg").style.color = res.ok ? "var(--good)" : "var(--crit)";
+  if (res.ok) {
+    $("srcName").value = ""; $("srcPath").value = ""; $("srcRegex").value = "";
+    $("addSourceForm").style.display = "none";
+    loadSources();
+  }
+});
+$("sourceRows").addEventListener("click", async (e) => {
+  const path = e.target.dataset && e.target.dataset.rmsrc;
+  if (!path) return;
+  if (!confirm("Stop watching this log source?")) return;
+  await fetch("api/logsources/remove", {method: "POST",
+    headers: {"Content-Type": "application/json", ...MUT},
+    body: JSON.stringify({path})});
+  loadSources();
+});
+async function addSource(body) {
+  return fetch("api/logsources", {method: "POST",
+    headers: {"Content-Type": "application/json", ...MUT},
+    body: JSON.stringify(body)}).then(r => r.json()).catch(() => ({ok:false, message:"request failed"}));
+}
+function renderScan(cands) {
+  const box = $("scanResults");
+  box.style.display = "block";
+  if (!cands.length) {
+    box.innerHTML = `<div class="empty">No new log files found — already watching everything auto-detectable. (Add anything unusual by hand.)</div>`;
+    return;
+  }
+  box._cands = cands;
+  box.innerHTML =
+    `<div class="analysis-head"><div class="subhead" style="margin:0">` +
+    `Found ${cands.length} candidate log file(s) — review and add</div>` +
+    `<div class="spacer" style="flex:1"></div><button id="addAllScan">Add all</button></div>` +
+    cands.map((c, i) => `<div class="scanrow" data-row="${i}">
+       <div class="meta"><span class="tag">${esc(c.type)}</span> <b>${esc(c.name)}</b>
+         <div class="rules">${esc(c.path)}</div>
+         <div class="samp" title="${esc(c.sample||"")}">${esc(c.sample||"")}</div></div>
+       <button data-addscan="${i}">Add</button></div>`).join("");
+}
+$("scanBtn").addEventListener("click", async () => {
+  $("scanBtn").disabled = true; $("scanBtn").textContent = "Scanning…";
+  const d = await fetch("api/logsources/scan", {method: "POST", headers: {...MUT}})
+    .then(r => r.json()).catch(() => ({candidates: []}));
+  $("scanBtn").disabled = false; $("scanBtn").textContent = "Scan for logs";
+  renderScan(d.candidates || []);
+});
+$("scanResults").addEventListener("click", async (e) => {
+  const box = $("scanResults"), cands = box._cands || [];
+  if (e.target.id === "addAllScan") {
+    e.target.disabled = true; e.target.textContent = "Adding…";
+    for (const c of cands) await addSource({name: c.name, path: c.path, type: c.type, regex: ""});
+    loadSources(); box.style.display = "none";
+    return;
+  }
+  const i = e.target.dataset && e.target.dataset.addscan;
+  if (i == null) return;
+  const c = cands[+i];
+  e.target.disabled = true; e.target.textContent = "Adding…";
+  const res = await addSource({name: c.name, path: c.path, type: c.type, regex: ""});
+  if (res.ok) {
+    e.target.textContent = "Added ✓";
+    const row = e.target.closest(".scanrow"); if (row) row.style.opacity = ".5";
+    loadSources();
+  } else {
+    e.target.disabled = false; e.target.textContent = "Add";
+    alert(res.message || "Failed to add");
+  }
+});
+
 async function loadAnalysis() {
   try {
     const a = await fetch("api/analysis/latest").then(r => r.json());
@@ -995,8 +1231,10 @@ $("sevFilter").addEventListener("change", refresh);
 refresh();
 loadAnalysis();
 loadVulns();
+loadSources();
 setInterval(refresh, 30000);
 setInterval(loadAnalysis, 60000);
 setInterval(loadVulns, 300000);
+setInterval(loadSources, 30000);
 window.addEventListener("resize", () => refresh());
 """

@@ -29,10 +29,25 @@ network:
 
 # Which reverse-proxy access log to read (log-source adapter):
 #   traefik (JSON) | nginx (combined) | caddy (JSON) | regex (custom)
+# SINGLE source — the classic setup. Reads paths.access_log with this format:
 log_source:
   type: traefik
   # for type: regex — a pattern with named groups ip/host/method/path/status/ua:
   # regex: '(?P<ip>\S+) (?P<host>\S+) "(?P<method>\S+) (?P<path>\S+)[^"]*" (?P<status>\d+) .*"(?P<ua>[^"]*)"'
+
+# MULTIPLE sources (optional) — monitor your edge proxy AND internal apps that
+# don't sit behind it. If `log_sources` is set it takes precedence over the
+# single `log_source`/`paths.access_log` above; all sources feed one detection
+# engine (bans, endpoint rules, crowd intel apply across all of them). Each
+# entry: name (label), path (log file), type (parser), optional regex.
+# You can also add/remove local-app sources live from the dashboard's
+# "Log sources" card (no restart, no YAML edit) — those are stored separately
+# in data/log_sources.json and merged on top of anything listed here.
+# log_sources:
+#   - { name: edge,     path: /srv/YOUR_APP/logs/traefik/access.json.log, type: traefik }
+#   - { name: gitea,    path: /var/log/nginx/gitea.access.log,            type: nginx }
+#   - { name: internal, path: /var/log/myapp/access.log,                  type: regex,
+#       regex: '(?P<ip>\S+) - "(?P<method>\S+) (?P<path>\S+)[^"]*" (?P<status>\d+) "(?P<ua>[^"]*)"' }
 
 proxy:
   traefik_container: traefik

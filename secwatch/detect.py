@@ -117,8 +117,11 @@ class Engine:
         self.traffic_buf = defaultdict(lambda: [0, 0, 0])   # minute -> [req,4xx,5xx]
         self.ip_buf = defaultdict(lambda: [0, 0])           # (minute,ip) -> [req,4xx]
         self.last_flush = 0.0
-        self.tail_state = None   # (inode, offset), persisted on flush
-        self._flushed_tail_state = None
+        # per log-source tail offsets {source_key: (inode, offset)}, persisted on flush
+        self.tail_states = {}
+        self._flushed_tail_states = {}
+        # per log-source liveness for the dashboard {path: {records, last_ts}}
+        self.source_status = {}
         self.last_log_line_ts = 0.0   # updated on every parsed access-log line
         # host -> True (catch-all SPA: 200s any path) / False (real backend).
         # A probe path returning 200 only means "hit" on a real backend; a SPA
@@ -359,13 +362,14 @@ class Engine:
             )
         self.traffic_buf.clear()
         self.ip_buf.clear()
-        if self.tail_state and self.tail_state != self._flushed_tail_state:
-            self.conn.execute(
-                "INSERT INTO meta(key,value) VALUES('tail',?) "
-                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                ("%d:%d" % self.tail_state,),
-            )
-            self._flushed_tail_state = self.tail_state
+        for key, st in list(self.tail_states.items()):
+            if st and st != self._flushed_tail_states.get(key):
+                self.conn.execute(
+                    "INSERT INTO meta(key,value) VALUES(?,?) "
+                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                    (f"tail:{key}", "%d:%d" % st),
+                )
+                self._flushed_tail_states[key] = st
         if self.conn.in_transaction:
             self.conn.commit()
         self._prune_idle(now)

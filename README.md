@@ -8,15 +8,16 @@
 
 ---
 
-secwatch watches your reverse proxy's access log and your host's auth log, keeps
-an eye on host/process/container state, auto-bans hostile IPs at the edge, and
+secwatch watches your reverse proxy's access log **and your internal apps' logs**,
+keeps an eye on host/process/container state, auto-bans hostile IPs at the edge, and
 serves a self-contained dashboard — so you can actually *see* what's hitting your
 box and what it's doing. No agents-and-managers stack, no external SaaS, no
 account required.
 
 > **Who it's for:** homelabbers and small-fleet admins who expose a few apps
-> behind Traefik / nginx / Caddy and want real security visibility **without**
-> standing up and wiring together CrowdSec + Wazuh + Trivy + fail2ban separately.
+> behind Traefik / nginx / Caddy — and often run internal-only apps too — and want
+> real security visibility **without** standing up and wiring together
+> CrowdSec + Wazuh + Trivy + fail2ban separately.
 
 ## Why secwatch (and how it compares)
 
@@ -42,6 +43,11 @@ mitigation *aid*, not a firewall or a patch manager.
   stuffing, secret-file probes (`.env`/`.git`/…), and declarative per-endpoint
   rules (login brute force, admin abuse, API scraping, IDOR enumeration). Hostile
   IPs are banned at the proxy (Traefik / nftables / nginx).
+- **Watches every app, not just the edge** — point it at multiple access logs at
+  once (your reverse proxy *and* internal apps that don't sit behind it). One
+  detection engine, so bans and rules apply across all of them. Add or
+  **auto-discover** ("Scan for logs") sources right from the dashboard — no restart,
+  no YAML editing.
 - **Host & EDR-lite** — SSH/auth monitoring; a persistence baseline (systemd
   units, SUID, `ld.so.preload`, cron, shell rc, UID-0 accounts); process
   signatures (reverse shells, miners, temp-dir execs); new-egress/C2 awareness.
@@ -78,9 +84,11 @@ Configuring by hand? `cp secwatch.example.yaml secwatch.yaml`, edit it (or run
 
 Everything host-specific lives in `secwatch.yaml` (see the fully-commented
 `secwatch.example.yaml`); any value can also be set via a `SECWATCH_*` env var.
-Highlights: `log_source.type` (traefik/nginx/caddy/regex), `ban.actuator`
-(traefik/nftables/nginx/none), `network.trusted_nets` (keep it **narrow**),
-`endpoint_rules`, `auth.*` (dashboard login), `llm.*` (optional).
+Highlights: `log_source.type` (traefik/nginx/caddy/regex), `log_sources` (watch
+several at once), `ban.actuator` (traefik/nftables/nginx/none),
+`network.trusted_nets` (keep it **narrow**), `endpoint_rules`, `auth.*`
+(dashboard login), `llm.*` (optional). You can also add or scan for extra log
+sources live from the dashboard's **Log sources** card.
 
 ## Deploying with Docker
 
@@ -92,6 +100,13 @@ docker compose up -d      # see docker-compose.yml for mounts + the mode options
 `agent` (host collectors only, forwarding to a core). The **core + agent** split
 keeps the internet-facing core low-privilege while the deep-host-access part stays
 a minimal host process.
+
+## Documentation
+
+Full how-to guides live in the **[Wiki](https://github.com/Paco5687/secwatch/wiki)** —
+installation, configuration reference, log sources (multi-source + dashboard),
+detection & bans, dashboard auth, CVE/LLM/crowd-intel, Docker & deployment modes,
+and troubleshooting.
 
 ## Requirements
 

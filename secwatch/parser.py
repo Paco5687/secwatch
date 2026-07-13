@@ -96,5 +96,24 @@ _PARSERS = {"traefik": parse_traefik, "nginx": parse_nginx,
             "caddy": parse_caddy, "regex": parse_regex}
 
 
+def parser_for(source_type, regex=""):
+    """Return a line→record callable for one source (its own compiled regex if
+    type is 'regex'). Used by multi-source tailing."""
+    if source_type == "regex":
+        pat = re.compile(regex) if regex else None
+
+        def _p(line):
+            if not pat:
+                return None
+            m = pat.search(line)
+            if not m:
+                return None
+            g = m.groupdict()
+            return _rec(g.get("ip"), g.get("host", ""), g.get("method", ""),
+                        g.get("path", ""), g.get("status", 0), g.get("ua", ""))
+        return _p
+    return _PARSERS.get(source_type, parse_traefik)
+
+
 def parse_line(line, source=None):
     return _PARSERS.get(source or config.LOG_SOURCE_TYPE, parse_traefik)(line)

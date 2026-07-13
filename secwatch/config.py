@@ -6,6 +6,7 @@ built-in default. Host/site-specifics (endpoint rules, trusted nets, app hosts,
 FIM dirs, proxy paths, integrations) live in `secwatch.yaml` — NOT in this file —
 so the code is portable and shareable. See `secwatch.example.yaml`.
 """
+import json
 import os
 from pathlib import Path
 
@@ -78,10 +79,58 @@ DASHBOARD_URL = _s("SECWATCH_DASHBOARD_URL", "paths.dashboard_url",
 # when secwatch is fronted by a proxy that enforces a CSRF header. Empty = none.
 PROXY_MUTATION_HEADER = _s(None, "dashboard.proxy_mutation_header", "")
 
-# ---- log-source adapter (which proxy's access log) ----------------------
+# ---- log-source adapter(s) ----------------------------------------------
 # traefik (JSON) | nginx (combined) | caddy (JSON) | regex (custom, needs regex)
 LOG_SOURCE_TYPE = _s("SECWATCH_LOG_SOURCE", "log_source.type", "traefik")
 LOG_SOURCE_REGEX = _s(None, "log_source.regex", "")
+
+
+# Extra sources added at runtime via the dashboard (not the hand-edited YAML)
+# are persisted here as a JSON list and merged in below. logsources.py manages it.
+MANAGED_SOURCES_FILE = DB_PATH.parent / "log_sources.json"
+
+
+def _read_managed_sources():
+    try:
+        with open(MANAGED_SOURCES_FILE) as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except (OSError, ValueError):
+        return []
+
+
+def _build_log_sources():
+    """Watch several access logs at once (e.g. your reverse proxy AND a
+    directly-exposed internal app). Site config `log_sources: [{path,type,regex}]`;
+    otherwise wrap the single paths.access_log + log_source.* (back-compat).
+    Dashboard-added sources (MANAGED_SOURCES_FILE) are appended on top."""
+    srcs = _y("log_sources")
+    out = []
+    if isinstance(srcs, list) and srcs:
+        for s in srcs:
+            path = s.get("path")
+            if not path:
+                continue
+            out.append({"path": path, "type": s.get("type", "traefik"),
+                        "regex": s.get("regex", ""),
+                        "name": s.get("name") or path})
+    if not out:
+        out = [{"path": str(ACCESS_LOG), "type": LOG_SOURCE_TYPE,
+                "regex": LOG_SOURCE_REGEX, "name": "primary"}]
+    out[0]["primary"] = True   # primary resumes the legacy 'tail' offset key
+    seen = {s["path"] for s in out}
+    for s in _read_managed_sources():
+        path = s.get("path")
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        out.append({"path": path, "type": s.get("type", "traefik"),
+                    "regex": s.get("regex", ""), "name": s.get("name") or path,
+                    "managed": True})
+    return out
+
+
+LOG_SOURCES = _build_log_sources()
 LISTEN_HOST = os.environ.get("SECWATCH_HOST", "0.0.0.0")
 LISTEN_PORT = int(os.environ.get("SECWATCH_PORT", "8931"))
 
