@@ -47,6 +47,8 @@ RULE_TITLE = {
     "cve_kev": "Actively-exploited CVE (CISA KEV) on a running image",
     "cve_new": "New high/critical CVE on a running image",
     "dashboard_bruteforce": "secwatch dashboard login brute force",
+    "health_degraded": "secwatch self-check degraded",
+    "health_recovered": "secwatch self-check recovered",
     "ssh_brute": "SSH brute force",
     "ssh_login": "SSH login from new IP",
     "new_user": "System user created",

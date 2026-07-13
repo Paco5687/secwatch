@@ -12,8 +12,8 @@ from fastapi import Body, FastAPI, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from . import (alert, auth, auditwatch, authwatch, ban, config, cvewatch, db,
-               detect, dockerwatch, fimwatch, hostwatch, llm_analysis, parser,
-               procwatch, tailer)
+               detect, dockerwatch, fimwatch, healthwatch, hostwatch,
+               llm_analysis, parser, procwatch, tailer)
 
 log = logging.getLogger("secwatch.web")
 
@@ -230,6 +230,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(cve_task(), name="cve"),
         asyncio.create_task(catchall_task(engine), name="catchall"),
         asyncio.create_task(edge_silence_task(engine), name="edge_silence"),
+        asyncio.create_task(healthwatch.HealthWatcher(engine, conn).run(), name="health"),
     ]
     if config.MODE == "all":
         tasks += [
@@ -512,6 +513,11 @@ async def ingest(request: Request, payload: dict = Body(...)):
                payload.get("detail", ""), count=payload.get("count", 1))
     eng.maybe_flush(force=True)
     return {"ok": True}
+
+
+@app.get("/api/health")
+def api_health():
+    return healthwatch.STATE
 
 
 @app.get("/healthz")

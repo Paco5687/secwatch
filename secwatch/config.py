@@ -227,6 +227,14 @@ AUTH_TRUST_PROXY_FROM = _list("SECWATCH_AUTH_TRUST_PROXY_FROM",
 AUTH_MAX_FAILS = int(_s(None, "auth.max_fails", 8))
 AUTH_LOCKOUT_SECS = int(_s(None, "auth.lockout_secs", 300))
 
+# ---- self-maintenance (health + update awareness) -----------------------
+HEALTH_INTERVAL = int(os.environ.get("SECWATCH_HEALTH_INTERVAL", "300"))
+HEALTH_DISK_MIN_PCT = int(_s(None, "maintenance.disk_min_free_pct", 5))
+# Notify (not auto-apply) when a newer secwatch version is published. Best-effort.
+UPDATE_CHECK = _bool("SECWATCH_UPDATE_CHECK", "maintenance.update_check", True)
+UPDATE_VERSION_URL = _s(None, "maintenance.version_url",
+    "https://raw.githubusercontent.com/Paco5687/secwatch/main/secwatch/__init__.py")
+
 # ---- Traefik-integrity failsafes (generic) ------------------------------
 LOG_SILENCE_ALERT_SECS = int(os.environ.get("SECWATCH_LOG_SILENCE_SECS", "900"))
 
