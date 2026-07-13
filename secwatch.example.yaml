@@ -1,0 +1,172 @@
+# secwatch site configuration — TEMPLATE.
+# Copy to `secwatch.yaml` (gitignored) and edit for your host. Every value can
+# also be overridden with a SECWATCH_* env var. `secwatch init` (coming) can
+# generate this automatically by probing your host.
+
+paths:
+  access_log: /srv/YOUR_APP/logs/traefik/access.json.log
+  auth_log: /var/log/auth.log
+  dashboard_url: http://localhost:8931/
+
+network:
+  # Narrow trust: server VLAN + admin workstations only (NOT the whole LAN).
+  trusted_nets:
+    - 192.168.1.0/24
+    - 192.168.1.0/32
+    - 192.168.1.0/32
+    - 127.0.0.0/8
+    - 172.16.0.0/12
+  autoban_private: false
+  egress_allowlist:
+    - 173.245.48.0/20
+    - 103.21.244.0/22
+    - 104.16.0.0/13
+    - 104.24.0.0/14
+    - 172.64.0.0/13
+    - 131.0.72.0/22
+    - 162.158.0.0/15
+    - 198.41.128.0/17
+
+# Which reverse-proxy access log to read (log-source adapter):
+#   traefik (JSON) | nginx (combined) | caddy (JSON) | regex (custom)
+log_source:
+  type: traefik
+  # for type: regex — a pattern with named groups ip/host/method/path/status/ua:
+  # regex: '(?P<ip>\S+) (?P<host>\S+) "(?P<method>\S+) (?P<path>\S+)[^"]*" (?P<status>\d+) .*"(?P<ua>[^"]*)"'
+
+proxy:
+  traefik_container: traefik
+  traefik_dynamic_dir: /srv/YOUR_APP/infra/traefik/dynamic
+  bans_file: /srv/YOUR_APP/infra/traefik/dynamic/secwatch-bans.yml
+
+# How a ban is enforced (ban-actuator adapter):
+#   traefik  — write a ClientIP deny router file (needs proxy.bans_file)
+#   nftables — maintain an nft set dropped in the input chain (needs root)
+#   nginx    — write a `deny <ip>;` include + reload nginx (needs root)
+#   none     — alert only; don't actually block
+ban:
+  enabled: true
+  actuator: traefik
+  # nftables: { table: secwatch, set: banned }
+  # nginx: { deny_file: /etc/nginx/secwatch-bans.conf, reload_cmd: "nginx -s reload" }
+
+credential_stuffing:
+  host: auth.example.com
+  path_markers: [/api/v3/flows, /if/flow]
+
+app_hosts: [app.example.com, app.example.com]
+
+endpoint_rules:
+  - name: login_bruteforce
+    label: app login
+    hosts: [app.example.com, app.example.com, ops.example.com]
+    path_re: '^/auth/password/(login|register|forgot|reset)($|[/?])|^/auth/native/exchange|^/login($|[/?])'
+    type: auth_abuse
+    statuses: [400, 401, 403, 422, 429]
+    window: 300
+    limit: 12
+    severity: high
+    ban: true
+  - name: privileged_access
+    label: admin / api-keys
+    hosts: ['*']
+    path_re: '^/admin($|[/?])|^/api-keys($|[/?])|^/api/app/api-keys'
+    type: privileged
+    statuses: [401, 403]
+    severity: high
+    ban: false
+  - name: data_api_scraping
+    label: product / catalog API
+    hosts: [app.example.com, app.example.com]
+    path_re: '^/api/app/(products|categories|public|dashboard)|^/catalog/'
+    type: rate
+    window: 300
+    limit: 700
+    severity: medium
+    ban: false
+  - name: portfolio_enumeration
+    label: portfolios by ID
+    hosts: [app.example.com, app.example.com]
+    path_re: '^/api/app/portfolios/([^/?]+)'
+    type: enumeration
+    window: 300
+    limit: 30
+    severity: medium
+    ban: false
+
+fim:
+  watch_dirs:
+    - /srv/YOUR_APP/api/ui/dist
+    - /srv/YOUR_APP/dist
+    - /srv/YOUR_APP/dist
+    - /srv/YOUR_APP/dist
+    - /srv/YOUR_APP/data/commerce_media
+  canary_dirs:
+    - /srv/YOUR_APP/data
+    - /srv/YOUR_APP
+    - /srv/YOUR_APP
+
+llm:
+  enabled: false                    # optional — needs an OpenAI-compatible endpoint
+  base_url: http://127.0.0.1:11434/v1   # e.g. local Ollama; or a vLLM / remote API
+  model: your-model-name
+  api_key: ""                       # set for a remote API (sent as Bearer)
+  alert_threat: elevated
+
+cve:
+  enabled: true
+
+# Built-in dashboard auth — for exposing secwatch directly on IP:port with no
+# authenticating reverse proxy in front. `secwatch install` sets this up for you.
+auth:
+  enabled: false                    # `secwatch install` turns this on
+  username: admin
+  password_hash: ""                 # pbkdf2 hash — set via `secwatch install`, never plaintext
+  session_ttl: 86400
+  # Requests from these sources skip auth (a fronting proxy already authed them);
+  # localhost is trusted by default so a co-located reverse proxy keeps working.
+  trust_proxy_from: [127.0.0.1/32, ::1/128]
+  max_fails: 8
+  lockout_secs: 300
+
+alerting:
+  # Either put the webhook URL here directly (discord_webhook_url: https://...),
+  # or read it from a file to keep the secret out of this config:
+  discord_webhook_file: /srv/YOUR_APP/.secrets/discord-webhook.env
+  discord_webhook_file_key: SECWATCH_DISCORD_WEBHOOK_URL
+
+known_legitimate_endpoints:
+  - host: ops.example.com
+    path_prefix: /integrations/ebay/marketplace-account-deletion
+    note: >-
+      eBay-REQUIRED Marketplace Account Deletion compliance webhook. eBay's own
+      servers (ReactorNetty UA, eBay proxy IPs) call this repeatedly by design;
+      it self-authenticates via eBay's verification token + signature. Expected
+      traffic — do NOT flag, rate-limit, or add auth (that would break eBay
+      compliance).
+
+active_mitigations:
+  - >-
+    All WordPress/PHP paths (/wp-*, /xmlrpc.php, /wordpress) already return 403
+    at the Traefik edge on every vhost. There is no WordPress/PHP on this host;
+    these probes are fully blocked. Do NOT recommend restricting, rate-limiting,
+    auditing, or otherwise acting on WordPress/wp-admin/wp-login paths.
+  - >-
+    SSH (port 22) is firewalled from the internet (LAN-only; zero external SSH
+    attempts in the logs) and protected by fail2ban with the sshd jail enabled.
+    Do NOT recommend SSH hardening unless EXTERNAL SSH attempts actually appear.
+  - >-
+    Hostile IPs are auto-banned at the Traefik edge (high-severity
+    probe/scan/flood/cred-stuffing on a real backend). A ClientIP deny list is
+    already active.
+  - >-
+    Port 8931 is secwatch's own dashboard/API (this monitor). State changes on
+    8931 are secwatch restarts, not a rogue service.
+  - >-
+    /security/* on ops.example.com is secwatch's OWN dashboard, proxied behind
+    admin-session auth. High GET volume there from trusted LAN IPs (e.g.
+    192.168.1.0) is the ops dashboard auto-refreshing — expected internal
+    traffic, not abuse. Do NOT recommend rate-limiting or restricting it.
+  - >-
+    dockerproxy is the read-only Docker API proxy in front of Traefik
+    (intentional infra). It is expected to exist.

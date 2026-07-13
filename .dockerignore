@@ -1,0 +1,13 @@
+.venv/
+data/
+logs/
+.secrets/
+.git/
+__pycache__/
+*.pyc
+secwatch.yaml
+*.db
+*.db-wal
+*.db-shm
+.secwatch-canary-*
+secwatch.service

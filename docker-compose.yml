@@ -1,0 +1,40 @@
+# secwatch — containerized deployment.
+#
+# Three modes (set SECWATCH_MODE):
+#   all   — one container does everything. Needs deep host access (pid:host,
+#           /proc, /var/log, docker socket) to watch host processes/persistence.
+#           Simplest, but the container is highly privileged — understand that.
+#   core  — this container runs detection/dashboard/CVE/LLM/alerting/ban only,
+#           with MINIMAL host access; run the host agent separately (see below).
+#   agent — `python -m secwatch.agent` ON THE HOST (systemd), forwarding host
+#           events to a core over HTTP. Keeps the web core isolated.
+#
+# The example below is the isolated CORE. For all-in-one, set SECWATCH_MODE=all
+# and add the host-access mounts noted inline.
+services:
+  secwatch:
+    build: .
+    image: secwatch:latest
+    container_name: secwatch
+    restart: unless-stopped
+    ports:
+      - "8931:8931"
+    environment:
+      SECWATCH_MODE: core                 # or "all" for single-container
+      SECWATCH_CONFIG: /app/secwatch.yaml
+      # agent→core auth (required if you run a separate agent):
+      SECWATCH_INGEST_TOKEN: "${SECWATCH_INGEST_TOKEN:-}"
+    volumes:
+      - ./secwatch.yaml:/app/secwatch.yaml:ro
+      - ./data:/app/data
+      # the reverse-proxy access log the core tails (adjust to your proxy):
+      - /var/log/traefik:/var/log/traefik:ro
+      # --- add these ONLY for MODE=all (single-container, host-privileged): ---
+      # - /var/log:/var/log:ro                         # auth.log
+      # - /var/run/docker.sock:/var/run/docker.sock:ro # CVE scan + docker watch
+      #   (and set  pid: host  below for process/egress detection)
+    # pid: host        # uncomment for MODE=all process detection
+    mem_limit: 512m
+    cpus: "1.0"
+    security_opt:
+      - no-new-privileges:true
