@@ -451,7 +451,7 @@ VIEWS.vulns = {
   title: "Vulnerabilities",
   async render() {
     const v = await jget("api/vulnerabilities");
-    if (!v.total) { $("view").innerHTML = `<div class="card"><div class="empty">No findings (or scan pending). CVE scanning needs Docker.</div></div>`; return; }
+    if (!v.total) { $("view").innerHTML = `<div class="card"><div class="empty">No findings yet — the scan (host OS packages + any container images) runs on a schedule; give it a few minutes on first boot while it fetches the vuln database.</div></div>`; return; }
     const byImg = {};
     for (const r of v.vulnerabilities) {
       byImg[r.image] = byImg[r.image] || {n: 0, crit: 0, kev: 0};

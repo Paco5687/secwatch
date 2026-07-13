@@ -321,6 +321,13 @@ TRIVY_CACHE = str(BASE_DIR / "data" / "trivy")
 CVE_SCAN_INTERVAL = int(os.environ.get("SECWATCH_CVE_INTERVAL", str(24 * 3600)))
 CVE_SEVERITIES = _s("SECWATCH_CVE_SEVERITIES", "cve.severities", "HIGH,CRITICAL")
 CVE_SCAN_TIMEOUT = int(os.environ.get("SECWATCH_CVE_TIMEOUT", "600"))
+# Only report CVEs that have a fix available (actionable) — an OS lists thousands
+# of will-not-fix/no-fix CVEs that just bury the ones you can act on. Set false to
+# see everything (compliance-style).
+CVE_IGNORE_UNFIXED = _bool("SECWATCH_CVE_IGNORE_UNFIXED", "cve.ignore_unfixed", True)
+# Also scan the HOST's OS packages (via a trivy binary; no Docker) — not just
+# container images. This is what makes CVE awareness useful on non-Docker nodes.
+CVE_SCAN_HOST = _bool("SECWATCH_CVE_SCAN_HOST", "cve.scan_host", True)
 KEV_URL = ("https://www.cisa.gov/sites/default/files/feeds/"
            "known_exploited_vulnerabilities.json")
 KEV_CACHE = BASE_DIR / "data" / "cisa-kev.json"

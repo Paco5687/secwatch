@@ -53,8 +53,9 @@ mitigation *aid*, not a firewall or a patch manager.
   signatures (reverse shells, miners, temp-dir execs); new-egress/C2 awareness.
 - **File integrity** — webshell/dropped-script detection in web roots + ransomware
   canaries.
-- **CVE awareness** — Trivy-scans running images and flags CVEs on the CISA KEV
-  list (actively exploited in the wild).
+- **CVE awareness** — Trivy-scans the **host's OS packages** (no Docker needed)
+  *and* running container images, reports only fixable HIGH/CRITICAL CVEs, and
+  flags the ones on the CISA KEV list (actively exploited in the wild).
 - **Watchdogs** — alerts if the access log goes silent or the proxy's route config
   changes unexpectedly.
 - **Optional LLM analysis** — point it at any OpenAI-compatible endpoint (local
