@@ -11,3 +11,4 @@ __pycache__/
 # host-specific live config (once Phase 1 lands, real values live here, not in code)
 secwatch.yaml
 .secwatch-canary-*
+secwatch.service

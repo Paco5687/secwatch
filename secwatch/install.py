@@ -48,6 +48,10 @@ def main(argv=None):
     ap.add_argument("--config", default=str(BASE_DIR / "secwatch.yaml"))
     ap.add_argument("--non-interactive", action="store_true")
     ap.add_argument("--force", action="store_true", help="overwrite existing config")
+    ap.add_argument("--start", action="store_true",
+                    help="install + start the systemd service without prompting")
+    ap.add_argument("--no-start", action="store_true",
+                    help="just write config + unit, don't install/start the service")
     args = ap.parse_args(argv)
     ni = args.non_interactive
 
@@ -104,20 +108,72 @@ def main(argv=None):
     print(f"✓ wrote {unit_path}", file=sys.stderr)
 
     ip = _primary_ip()
+    want = (args.start or ni) or (not args.no_start
+                                  and _ask_yn("\nInstall + start secwatch as a service now?", True))
+    if want:
+        ok, how = _start_service(unit)
+        if ok:
+            print(f"""
+✅ secwatch is ACTIVE ({how} service — starts on boot, restarts on failure).
+
+   Open  http://{ip}:{port}/{'' if args.no_auth else '   and sign in with the admin account you just created.'}
+
+   Manage it:  systemctl {'--user ' if how == 'user' else ''}status secwatch
+   Review config: {cfg_path}  (especially network.trusted_nets)
+""", file=sys.stderr)
+            return 0
+        print(f"! couldn't auto-start ({how}) — start it by hand:", file=sys.stderr)
+
     print(f"""
-Done. To run secwatch:
-
-  # foreground:
-  SECWATCH_HOST={host} SECWATCH_PORT={port} {sys.executable} -m secwatch.main
-
-  # or as a service:
-  cp {unit_path} ~/.config/systemd/user/    # (or /etc/systemd/system for system-wide)
-  systemctl --user daemon-reload && systemctl --user enable --now secwatch
-
-Then open  http://{ip}:{port}/  and sign in.
-Review {cfg_path} first — especially network.trusted_nets.
+To run secwatch:
+  # foreground:  SECWATCH_HOST={host} SECWATCH_PORT={port} {sys.executable} -m secwatch.main
+  # service:     sudo cp {unit_path} /etc/systemd/system/ && sudo systemctl enable --now secwatch
+Then open  http://{ip}:{port}/  (review {cfg_path} first).
 """, file=sys.stderr)
     return 0
+
+
+def _ask_yn(prompt, default=True):
+    try:
+        r = input(f"{prompt} [{'Y/n' if default else 'y/N'}]: ").strip().lower()
+    except EOFError:
+        return default
+    return default if not r else r.startswith("y")
+
+
+def _start_service(unit_text):
+    """Install + enable + start the systemd service. Prefers a system unit (boots
+    without login); falls back to a per-user unit. Returns (ok, 'system'|'user'|reason)."""
+    import shutil
+    import subprocess
+
+    def run(cmd, **kw):
+        return subprocess.run(cmd, capture_output=True, text=True, **kw)
+
+    if not shutil.which("systemctl"):
+        return False, "no systemd"
+    is_root = getattr(os, "geteuid", lambda: 1)() == 0
+    sudo = "" if is_root else (shutil.which("sudo") or "")
+
+    if is_root or sudo:
+        pfx = [] if is_root else [sudo]
+        tee = run(pfx + ["tee", "/etc/systemd/system/secwatch.service"], input=unit_text)
+        if tee.returncode != 0:
+            return False, "system"
+        run(pfx + ["systemctl", "daemon-reload"])
+        run(pfx + ["systemctl", "enable", "--now", "secwatch"])
+        act = run(pfx + ["systemctl", "is-active", "secwatch"])
+        return act.stdout.strip() == "active", "system"
+
+    # unprivileged: user unit + linger so it survives logout / boots
+    d = Path.home() / ".config" / "systemd" / "user"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "secwatch.service").write_text(unit_text)
+    run(["systemctl", "--user", "daemon-reload"])
+    run(["systemctl", "--user", "enable", "--now", "secwatch"])
+    run(["loginctl", "enable-linger", os.environ.get("USER", "")])
+    act = run(["systemctl", "--user", "is-active", "secwatch"])
+    return act.stdout.strip() == "active", "user"
 
 
 def _systemd_unit(host, port):
