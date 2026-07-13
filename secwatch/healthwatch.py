@@ -97,12 +97,16 @@ class HealthWatcher:
     async def run(self):
         while True:
             try:
-                await asyncio.to_thread(self.check)
+                # network (update check) off the loop; DB checks on the loop
+                # (sqlite conn is bound to this thread)
+                latest = (await asyncio.to_thread(_fetch_latest_version)
+                          if config.UPDATE_CHECK else None)
+                self.check(latest=latest)
             except Exception:
                 log.exception("health check failed")
             await asyncio.sleep(config.HEALTH_INTERVAL)
 
-    def check(self, now=None):
+    def check(self, now=None, latest="__skip__"):
         now = now or time.time()
         checks = {}
         try:
@@ -120,7 +124,10 @@ class HealthWatcher:
         failing = [n for n, c in checks.items() if not c["ok"]]
         status = "ok" if not failing else "degraded"
 
-        latest = _fetch_latest_version() if config.UPDATE_CHECK else None
+        # `latest` is passed in from run() (network done off-loop). "__skip__"
+        # (the default, used by unit tests) means don't touch the update state.
+        if latest == "__skip__":
+            latest = STATE.get("latest_version")
         update = bool(latest and _newer(latest, __version__))
 
         STATE.update(status=status, checks=checks, version=__version__,
