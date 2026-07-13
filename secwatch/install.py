@@ -73,23 +73,27 @@ def main(argv=None):
     draft["paths"]["dashboard_url"] = f"http://{_primary_ip()}:{port}/"
 
     # auth
+    generated_pw = None
     if args.no_auth:
         draft["auth"] = {"enabled": False}
         print("\n! dashboard auth DISABLED — only safe behind an authenticating "
               "proxy or on a fully trusted network.", file=sys.stderr)
+        user = None
     else:
         user = args.admin_user or ("admin" if ni else _ask("Admin username", "admin",
                                                             args.admin_user))
         pw = args.admin_password
         if not pw:
             if ni:
-                print("--admin-password required with --non-interactive", file=sys.stderr)
-                return 1
-            while True:
-                pw = getpass.getpass("Admin password: ")
-                if pw and pw == getpass.getpass("Confirm password: "):
-                    break
-                print("  passwords empty or didn't match, try again", file=sys.stderr)
+                import secrets
+                pw = secrets.token_urlsafe(12)   # non-interactive → generate one
+                generated_pw = pw
+            else:
+                while True:
+                    pw = getpass.getpass("Admin password: ")
+                    if pw and pw == getpass.getpass("Confirm password: "):
+                        break
+                    print("  passwords empty or didn't match, try again", file=sys.stderr)
         draft["auth"] = {"enabled": True, "username": user,
                          "password_hash": auth.hash_password(pw)}
 
@@ -108,18 +112,29 @@ def main(argv=None):
     print(f"✓ wrote {unit_path}", file=sys.stderr)
 
     ip = _primary_ip()
-    want = (args.start or ni) or (not args.no_start
-                                  and _ask_yn("\nInstall + start secwatch as a service now?", True))
+    if args.no_start:
+        want = False
+    elif args.start or ni:
+        want = True
+    else:
+        want = _ask_yn("\nInstall + start secwatch as a service now?", True)
+    creds = ""
+    if generated_pw:
+        creds = (f"\n   Sign in:   admin / {generated_pw}"
+                 f"\n   (auto-generated — SAVE IT; change it in Settings, or re-run with --admin-password)")
+    elif user:
+        creds = f"\n   Sign in with the admin account you set."
     if want:
         ok, how = _start_service(unit)
         if ok:
             print(f"""
+{'='*60}
 ✅ secwatch is ACTIVE ({how} service — starts on boot, restarts on failure).
 
-   Open  http://{ip}:{port}/{'' if args.no_auth else '   and sign in with the admin account you just created.'}
+   Open  http://{ip}:{port}/{creds}
 
    Manage it:  systemctl {'--user ' if how == 'user' else ''}status secwatch
-   Review config: {cfg_path}  (especially network.trusted_nets)
+{'='*60}
 """, file=sys.stderr)
             return 0
         print(f"! couldn't auto-start ({how}) — start it by hand:", file=sys.stderr)

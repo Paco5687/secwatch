@@ -65,18 +65,25 @@ mitigation *aid*, not a firewall or a patch manager.
 
 ## Quick start
 
+**One command** — installs everything and starts secwatch as a background service:
+
 ```bash
-git clone https://github.com/Paco5687/secwatch && cd secwatch
-./install.sh     # installs prerequisites (git/python3/venv) + deps, then runs the wizard
-# follow the printed steps → open http://SERVER-IP:PORT/ and sign in
+curl -fsSL https://raw.githubusercontent.com/Paco5687/secwatch/main/install.sh | sudo sh
 ```
 
-`install.sh` sets up everything in one go. Prefer to do it by hand? (note the
-`python3` — many distros don't ship a bare `python`):
+It installs prerequisites (git/python3/venv), sets up a virtualenv, writes config
+(port `8931` + an auto-generated admin password it prints), and **installs +
+starts the systemd service** — no prompts. It ends with
+`✅ secwatch is ACTIVE — open http://IP:8931/` and the login it generated.
+
+Customize with env vars: `SECWATCH_PORT`, `SECWATCH_ADMIN_PASSWORD`,
+`SECWATCH_NO_AUTH=1` (open dashboard on a trusted LAN), `SECWATCH_NO_START=1`.
+
+Prefer to review the code first? Clone and run the same installer:
 
 ```bash
-python3 -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt
-python -m secwatch.install     # pick a port, create an admin login, auto-detect config
+git clone https://github.com/Paco5687/secwatch && cd secwatch
+./install.sh        # one sudo prompt to install the service; otherwise identical
 ```
 
 `secwatch install` auto-detects your reverse proxy + access log, app hosts,
