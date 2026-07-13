@@ -184,6 +184,11 @@ CLUSTER_STORE = DB_PATH.parent / "cluster.json"     # peer roster (managed by CL
 CLUSTER_SECRET_FILE = DB_PATH.parent / "cluster.secret"   # shared secret, chmod 600
 CLUSTER_MAX_CLOCK_SKEW = int(_s(None, "cluster.max_clock_skew", 120))  # HMAC replay window
 CLUSTER_GOSSIP_SECS = int(_s("SECWATCH_CLUSTER_GOSSIP", "cluster.gossip_secs", 60))
+# Device enrollment ("Add device" one-liner → /install.sh). Tokens are single-use.
+CLUSTER_ENROLL_TTL = int(_s(None, "cluster.enroll_ttl", 3600))       # token lifetime (s)
+CLUSTER_INSTALL_REPO = _s(None, "cluster.install_repo",
+                          "https://github.com/Paco5687/secwatch.git")
+CLUSTER_INSTALL_DIR = _s(None, "cluster.install_dir", "/opt/secwatch")
 
 # ---- crowd-sourced threat intel (OPT-IN, off by default) ----------------
 # Optionally share confirmed bans (attacker IP + rule + timestamp ONLY — never

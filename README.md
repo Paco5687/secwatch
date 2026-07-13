@@ -124,7 +124,10 @@ auto-discovery), and inter-node requests are HMAC-signed.
 
 **Easiest: the dashboard's Cluster tab** — pick a role, click **Create cluster**
 (copy the secret) or **Join cluster** (paste a peer's URL + secret). No CLI, no
-restart. Or from the shell:
+restart. To add more boxes, **Add a device** hands you a one-liner
+(`curl -fsSL "http://SEEDER:8931/install.sh?token=…" | sudo sh`) that installs
+secwatch and auto-joins — RMM-style. The token is single-use; the script carries
+the cluster secret, so run it only over your trusted network. Or from the shell:
 
 ```bash
 # on the first node:

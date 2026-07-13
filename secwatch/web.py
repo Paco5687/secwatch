@@ -349,7 +349,8 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="secwatch", lifespan=lifespan)
 
 # ---- standalone auth (only active when config.AUTH_ENABLED) --------------
-_AUTH_OPEN_PATHS = {"/healthz", "/login", "/auth/login", "/auth/logout", "/favicon.ico"}
+_AUTH_OPEN_PATHS = {"/healthz", "/login", "/auth/login", "/auth/logout",
+                    "/favicon.ico", "/install.sh"}  # install.sh is enrollment-token-gated
 # Inter-node cluster RPCs — self-authenticate via HMAC, so they bypass the
 # dashboard login gate. Management endpoints are deliberately NOT here.
 _CLUSTER_HMAC_PATHS = {"/api/cluster/ping", "/api/cluster/join", "/api/cluster/roster",
@@ -1184,6 +1185,35 @@ async def cluster_setup(payload: dict = Body(...)):
         _ensure_cluster_tasks()
         return {"ok": True, "message": "Saved."}
     return {"ok": False, "message": "unknown action"}
+
+
+@app.post("/api/cluster/enroll")
+def cluster_enroll(payload: dict = Body(...)):
+    """Mint a single-use enrollment token and return the 'add device' one-liner."""
+    if not config.CLUSTER_ENABLED or not cluster.secret():
+        return {"ok": False, "message": "Form a cluster on this node first."}
+    if not config.CLUSTER_URL:
+        return {"ok": False, "message": "This node has no URL (a leaf can't seed "
+                "enrollment) — run this from a peer with cluster.url set."}
+    role = payload.get("role") if payload.get("role") in ("peer", "leaf") else "peer"
+    tok, expires = cluster.mint_enroll_token(role)
+    cmd = f'curl -fsSL "{config.CLUSTER_URL.rstrip("/")}/install.sh?token={tok}" | sudo sh'
+    return {"ok": True, "command": cmd, "role": role, "expires": expires,
+            "ttl_min": round(config.CLUSTER_ENROLL_TTL / 60)}
+
+
+@app.get("/install.sh")
+def install_sh(request: Request, token: str = Query("")):
+    """Serve the enrollment installer (token-gated; NOT dashboard-authed — the new
+    box has no session). The token is single-use and short-lived."""
+    v = cluster.consume_enroll_token(token)
+    if v is None:
+        return Response("# invalid or expired enrollment token\n", status_code=403,
+                        media_type="text/plain")
+    client = request.client.host if request.client else "?"
+    log.warning("cluster enrollment: serving installer to %s as role=%s", client, v["role"])
+    return Response(cluster.install_script(v["role"]),
+                    media_type="text/x-shellscript")
 
 
 @app.post("/api/cluster/reveal")

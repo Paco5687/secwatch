@@ -663,12 +663,32 @@ VIEWS.cluster = {
            <span><b>${totHigh}</b>high (24h)</span><span><b>${totBans}</b>bans</span></div>
        </div>
        <div class="catgrid">${nodeCards(nodes)}</div>
+       <div class="card" style="margin-top:12px"><div class="cardhead"><h2>Add a device</h2>
+         <div class="spacer"></div>
+         <select id="cEnrollRole"><option value="peer">peer</option><option value="leaf">leaf</option></select>
+         <button id="cEnroll">Generate install command</button></div>
+         <div class="sethelp">Run the generated one-liner on a new Linux box (as root) — it installs secwatch and auto-joins this cluster. Single-use, expires shortly. The command carries the cluster secret, so treat it like a password and only run it over your trusted network.</div>
+         <div id="cEnrollOut" style="margin-top:8px"></div>
+       </div>
        <div class="card" style="margin-top:12px"><div class="cardhead"><h2>Manage cluster</h2>
-         <div class="spacer"></div><button id="cReveal">Show secret (add a node)</button>
+         <div class="spacer"></div><button id="cReveal">Show secret</button>
          <button id="cLeave" class="danger">Leave cluster</button></div>
          <div id="cSecretReveal"></div>
-         ${peerRows ? `<div style="margin-top:10px">${peerRows}</div>` : `<div class="empty">No peers yet — use the secret to join another node.</div>`}
+         ${peerRows ? `<div style="margin-top:10px">${peerRows}</div>` : `<div class="empty">No peers yet — add a device above, or share the secret to join another node.</div>`}
        </div>`;
+    $("cEnroll").addEventListener("click", async () => {
+      $("cEnroll").disabled = true;
+      const r = await jpost("api/cluster/enroll", {role: $("cEnrollRole").value});
+      $("cEnroll").disabled = false;
+      if (!r.ok) { $("cEnrollOut").innerHTML = `<span class="msg-err">${esc(r.message)}</span>`; return; }
+      $("cEnrollOut").innerHTML =
+        `<div class="formrow"><input type="text" readonly value="${esc(r.command)}" id="enrollCmd" style="width:100%;font-family:var(--mono);font-size:12px" onclick="this.select()">
+          <button id="copyEnroll">Copy</button></div>
+         <div class="sethelp">Role: <b>${esc(r.role)}</b> · expires in ~${r.ttl_min} min · single-use.</div>`;
+      const c = $("copyEnroll");
+      c.addEventListener("click", () => { const i = $("enrollCmd"); i.select();
+        try { navigator.clipboard.writeText(i.value); c.textContent = "Copied ✓"; } catch (e) { document.execCommand("copy"); } });
+    });
     $("cReveal").addEventListener("click", async () => {
       const r = await jpost("api/cluster/reveal");
       $("cSecretReveal").innerHTML = secretBox(r.secret || ""); wireCopy();
