@@ -90,6 +90,12 @@ several at once), `ban.actuator` (traefik/nftables/nginx/none),
 (dashboard login), `llm.*` (optional). You can also add or scan for extra log
 sources live from the dashboard's **Log sources** card.
 
+Prefer clicking to editing YAML? The dashboard's **Settings** page edits the
+commonly-tuned settings in-app (alerting, LLM, detection thresholds, feature
+toggles) — most apply live, secrets are stored encrypted at rest, and it layers
+over `secwatch.yaml` (env vars still win). Security-critical settings (trusted
+networks, ban actuator, dashboard auth) stay YAML-only by design.
+
 ## Alerting
 
 Point secwatch at a **Discord webhook** to get pushed high-severity alerts. Keep

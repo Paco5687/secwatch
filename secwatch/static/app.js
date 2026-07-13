@@ -564,6 +564,91 @@ VIEWS.system = {
   },
 };
 
+/* ---------- settings ---------- */
+function setControl(f) {
+  const ro = f.readonly ? "disabled" : "";
+  const dk = `data-key="${esc(f.key)}" data-type="${esc(f.type)}"`;
+  if (f.type === "bool")
+    return `<label class="switch"><input type="checkbox" ${dk} ${f.value ? "checked" : ""} ${ro}><span></span></label>`;
+  if (f.type === "select")
+    return `<select ${dk} ${ro}>${(f.options || []).map(o =>
+      `<option ${o === f.value ? "selected" : ""}>${esc(o)}</option>`).join("")}</select>`;
+  if (f.type === "secret")
+    return `<div class="secretctl"><input type="password" ${dk} autocomplete="new-password"
+       placeholder="${f.is_set ? "•••••• set — blank keeps it" : "not set"}" ${ro}>` +
+       (f.is_set && !f.readonly ? `<button type="button" data-clearkey="${esc(f.key)}">clear</button>` : "") + `</div>`;
+  if (f.type === "list") {
+    const v = Array.isArray(f.value) ? f.value.join(", ") : (f.value || "");
+    return `<input type="text" ${dk} value="${esc(v)}" ${ro}>`;
+  }
+  const it = (f.type === "int" || f.type === "float") ? "number" : "text";
+  const step = f.type === "float" ? 'step="0.1"' : "";
+  return `<input type="${it}" ${step} ${dk} value="${esc(f.value ?? "")}" ${ro}>`;
+}
+function fieldRow(f) {
+  const badge = f.readonly ? `<span class="tag">yaml</span>`
+    : (f.live === false ? `<span class="tag" title="needs a restart to take effect">restart</span>` : "");
+  return `<div class="setrow"><div class="setlabel"><b>${esc(f.label)}</b> ${badge}` +
+    (f.help ? `<div class="sethelp">${esc(f.help)}</div>` : "") +
+    `</div><div class="setctl">${setControl(f)}</div></div>`;
+}
+VIEWS.settings = {
+  title: "Settings",
+  async render() {
+    const d = await jget("api/settings");
+    let html = "";
+    if (!d.crypto_available)
+      html += `<div class="card" style="margin-bottom:12px"><div class="msg-err">⚠ <b>cryptography</b> isn't installed — secret settings can't be stored encrypted. Run <span class="mono">pip install cryptography</span> and restart, or keep secrets in files.</div></div>`;
+    html += `<div class="card" style="margin-bottom:12px"><div class="sethelp">
+      Edits here layer over <span class="mono">secwatch.yaml</span> (env vars still win). Most apply
+      immediately; a <span class="tag">restart</span> tag means the change is saved but needs a restart.
+      Secrets are stored encrypted on the box.</div></div>`;
+    for (const sec of d.sections) {
+      html += `<div class="card" style="margin-bottom:12px"><h2>${esc(sec.title)}</h2>`;
+      for (const f of sec.fields) html += fieldRow(f);
+      html += `</div>`;
+    }
+    html += `<div class="card" id="saveBar" style="display:none">
+      <div class="cardhead"><span id="saveMsg" class="rules"></span><div class="spacer"></div>
+        <button id="revertBtn">Revert</button><button id="saveBtn">Save changes</button></div></div>`;
+    $("view").innerHTML = html;
+
+    const dirty = new Set();
+    const show = () => { $("saveBar").style.display = "block"; };
+    const onEdit = e => { if (e.target.dataset && e.target.dataset.key) { dirty.add(e.target.dataset.key); show(); } };
+    $("view").addEventListener("input", onEdit);
+    $("view").addEventListener("change", onEdit);
+    $("view").addEventListener("click", e => {
+      const k = e.target.dataset && e.target.dataset.clearkey;
+      if (!k) return;
+      const inp = $("view").querySelector(`input[data-key="${k}"]`);
+      inp.dataset.clear = "1"; inp.value = ""; inp.placeholder = "(will clear on save)";
+      dirty.add(k); show();
+    });
+    $("revertBtn").addEventListener("click", () => route());
+    $("saveBtn").addEventListener("click", async () => {
+      const updates = {};
+      dirty.forEach(key => {
+        const el = $("view").querySelector(`[data-key="${key}"]`);
+        if (!el) return;
+        const t = el.dataset.type;
+        if (t === "bool") updates[key] = el.checked;
+        else if (t === "secret") {
+          if (el.dataset.clear === "1") updates[key] = "";
+          else if (el.value) updates[key] = el.value;   // only send if typed
+        } else updates[key] = el.value;                 // server coerces
+      });
+      if (!Object.keys(updates).length) { $("saveBar").style.display = "none"; return; }
+      $("saveBtn").disabled = true;
+      const res = await jpost("api/settings", {updates});
+      $("saveBtn").disabled = false;
+      $("saveMsg").textContent = res.message || (res.ok ? "Saved." : "Failed.");
+      $("saveMsg").className = res.ok ? "msg-ok" : "msg-err";
+      if (res.ok) { dirty.clear(); setTimeout(() => { if (current.name === "settings") route(); }, 1400); }
+    });
+  },
+};
+
 /* ---------- boot ---------- */
 (async function boot() {
   let saved = null;

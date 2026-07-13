@@ -645,6 +645,160 @@ async def ingest(request: Request, payload: dict = Body(...)):
     return {"ok": True}
 
 
+# ---- Settings page (Common + safe scope) --------------------------------
+# Schema drives the UI. type: bool|int|float|text|secret|list|select.
+# live=True → hot-swapped on save; live=False → needs a restart to take effect.
+# readonly=True → shown for reference but edited only in secwatch.yaml.
+SETTINGS_SCHEMA = [
+    {"title": "Detection & bans", "fields": [
+        {"key": "ban.enabled", "label": "Auto-ban hostile IPs", "type": "bool", "live": True,
+         "help": "Master switch for enforcing bans at the proxy/firewall."},
+        {"key": "thresholds.secret_probe_ban", "label": "Instant-ban secret-file probes",
+         "type": "bool", "live": True, "help": "Ban on first /.env, /.git, … probe."},
+        {"key": "thresholds.rate_limit", "label": "Flood: requests/min per IP", "type": "int", "live": True},
+        {"key": "thresholds.scan_4xx_limit", "label": "Scan: 4xx/min per IP", "type": "int", "live": True},
+        {"key": "thresholds.bot_min_reqs", "label": "Bot volume: reqs in window", "type": "int", "live": True},
+        {"key": "thresholds.stuff_limit", "label": "Credential-stuffing threshold", "type": "int", "live": True},
+    ]},
+    {"title": "Alerting", "fields": [
+        {"key": "alerting.discord_webhook_url", "label": "Discord webhook URL", "type": "secret", "live": True,
+         "help": "Where high-severity alerts are pushed. Stored encrypted."},
+        {"key": "alerting.min_severity", "label": "Minimum severity to alert", "type": "select", "live": True,
+         "options": ["info", "low", "medium", "high"]},
+        {"key": "alerting.quiet_rules", "label": "Quiet rules (ban+log, no alert)", "type": "list", "live": True,
+         "help": "Routine scanner noise. Comma-separated rule names."},
+        {"key": "alerting.quiet_except_private", "label": "…but still alert from internal IPs",
+         "type": "bool", "live": True},
+    ]},
+    {"title": "LLM analysis", "fields": [
+        {"key": "llm.enabled", "label": "Enable scheduled LLM analysis", "type": "bool", "live": False,
+         "help": "Turning the scheduled loop on/off needs a restart."},
+        {"key": "llm.base_url", "label": "Endpoint base URL", "type": "text", "live": True,
+         "help": "Any OpenAI-compatible /chat/completions endpoint."},
+        {"key": "llm.model", "label": "Model", "type": "text", "live": True},
+        {"key": "llm.api_key", "label": "API key (hosted providers)", "type": "secret", "live": True,
+         "help": "Sent as Bearer token. Stored encrypted. Blank for local runners."},
+        {"key": "llm.json_mode", "label": "Request JSON mode (response_format)", "type": "bool", "live": True,
+         "help": "Turn off if your provider 400s on it."},
+        {"key": "llm.temperature", "label": "Temperature", "type": "float", "live": True},
+        {"key": "llm.max_tokens", "label": "Max tokens", "type": "int", "live": True},
+        {"key": "llm.alert_threat", "label": "Alert at threat level ≥", "type": "select", "live": True,
+         "options": ["low", "guarded", "elevated", "high", "critical"]},
+    ]},
+    {"title": "Vulnerability scanning", "fields": [
+        {"key": "cve.enabled", "label": "Enable image CVE scanning", "type": "bool", "live": False,
+         "help": "Needs Docker. Toggling the scan loop needs a restart."},
+        {"key": "cve.severities", "label": "Severities to report", "type": "text", "live": True},
+    ]},
+    {"title": "Security-critical (edit in secwatch.yaml)", "readonly": True, "fields": [
+        {"key": "network.trusted_nets", "label": "Trusted networks", "type": "list", "readonly": True},
+        {"key": "ban.actuator", "label": "Ban actuator", "type": "text", "readonly": True},
+        {"key": "auth.enabled", "label": "Dashboard login", "type": "bool", "readonly": True},
+        {"key": "mode", "label": "Deployment mode", "type": "text", "readonly": True},
+    ]},
+]
+
+# dotted key -> current live value (secrets excluded — never returned)
+_SETTING_VALUE = {
+    "ban.enabled": lambda: config.AUTOBAN,
+    "thresholds.secret_probe_ban": lambda: config.SECRET_PROBE_BAN,
+    "thresholds.rate_limit": lambda: config.RATE_LIMIT,
+    "thresholds.scan_4xx_limit": lambda: config.SCAN_4XX_LIMIT,
+    "thresholds.bot_min_reqs": lambda: config.BOT_MIN_REQS,
+    "thresholds.stuff_limit": lambda: config.STUFF_LIMIT,
+    "alerting.min_severity": lambda: config.ALERT_MIN_SEVERITY,
+    "alerting.quiet_rules": lambda: sorted(config.ALERT_QUIET_RULES),
+    "alerting.quiet_except_private": lambda: config.ALERT_QUIET_EXCEPT_PRIVATE,
+    "llm.enabled": lambda: config.LLM_ANALYSIS,
+    "llm.base_url": lambda: config.LLM_BASE_URL,
+    "llm.model": lambda: config.LLM_MODEL,
+    "llm.json_mode": lambda: config.LLM_JSON_MODE,
+    "llm.temperature": lambda: config.LLM_TEMPERATURE,
+    "llm.max_tokens": lambda: config.LLM_MAX_TOKENS,
+    "llm.alert_threat": lambda: config.LLM_ALERT_THREAT,
+    "cve.enabled": lambda: config.CVE_SCAN,
+    "cve.severities": lambda: config.CVE_SEVERITIES,
+    "network.trusted_nets": lambda: config.TRUSTED_NETS,
+    "ban.actuator": lambda: config.BAN_ACTUATOR,
+    "auth.enabled": lambda: config.AUTH_ENABLED,
+    "mode": lambda: config.MODE,
+}
+_EDITABLE_FIELDS = {f["key"]: f for sec in SETTINGS_SCHEMA if not sec.get("readonly")
+                    for f in sec["fields"] if not f.get("readonly")}
+
+
+def _coerce_setting(field, value):
+    """Validate + coerce an incoming value to the field's type. Raises ValueError."""
+    t = field["type"]
+    if t == "bool":
+        return bool(value)
+    if t == "int":
+        return int(value)
+    if t == "float":
+        return float(value)
+    if t == "select":
+        v = str(value)
+        if v not in field["options"]:
+            raise ValueError(f"must be one of {field['options']}")
+        return v
+    if t == "list":
+        if isinstance(value, list):
+            return [str(x).strip() for x in value if str(x).strip()]
+        return [x.strip() for x in str(value).split(",") if x.strip()]
+    # text / secret
+    return str(value)
+
+
+@app.get("/api/settings")
+def get_settings():
+    from . import settings as st
+    secret_set = st.secret_status()
+    sections = []
+    for sec in SETTINGS_SCHEMA:
+        fields = []
+        for f in sec["fields"]:
+            item = {k: f[k] for k in ("key", "label", "type", "help", "options", "live")
+                    if k in f}
+            item["readonly"] = bool(sec.get("readonly") or f.get("readonly"))
+            if f["type"] == "secret":
+                item["is_set"] = secret_set.get(f["key"], False)   # value never sent
+            else:
+                getter = _SETTING_VALUE.get(f["key"])
+                item["value"] = getter() if getter else None
+            fields.append(item)
+        sections.append({"title": sec["title"], "readonly": bool(sec.get("readonly")),
+                         "fields": fields})
+    return {"sections": sections, "crypto_available": st.crypto_available()}
+
+
+@app.post("/api/settings")
+def save_settings(payload: dict = Body(...)):
+    from . import settings as st
+    updates = payload.get("updates")
+    if not isinstance(updates, dict) or not updates:
+        return {"ok": False, "message": "no updates provided"}
+    coerced = {}
+    for key, raw in updates.items():
+        field = _EDITABLE_FIELDS.get(key)
+        if field is None:                       # not an editable key → reject
+            return {"ok": False, "message": f"'{key}' is not an editable setting"}
+        try:
+            coerced[key] = _coerce_setting(field, raw)
+        except (ValueError, TypeError) as exc:
+            return {"ok": False, "message": f"{field['label']}: {exc}"}
+    try:
+        for key, val in coerced.items():
+            st.set_value(key, val)
+    except RuntimeError as exc:                  # e.g. crypto missing for a secret
+        return {"ok": False, "message": str(exc)}
+    config.reload_live()
+    restart = sorted(k for k in coerced if k not in config.SETTING_LIVE_KEYS)
+    return {"ok": True, "applied_live": [k for k in coerced if k in config.SETTING_LIVE_KEYS],
+            "restart_required": restart,
+            "message": ("Saved." if not restart else
+                        "Saved — restart secwatch to apply: " + ", ".join(restart))}
+
+
 @app.get("/api/uiconfig")
 def uiconfig():
     """Boot config for the SPA (mutation header, features, version)."""

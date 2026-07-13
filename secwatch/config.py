@@ -30,6 +30,12 @@ def _load_site_config():
 
 _cfg = _load_site_config()
 
+# In-app editable overrides (Settings page). Layer BETWEEN env and yaml so a UI
+# edit wins over the declarative secwatch.yaml but an explicit env var still wins
+# over the UI (containers/ops). settings.py imports nothing from secwatch.
+from . import settings as _settings  # noqa: E402
+_overrides = _settings.load_overrides()
+
 
 def _y(dotted, default=None):
     """Read a dotted key from the site config, else default."""
@@ -43,10 +49,12 @@ def _y(dotted, default=None):
 
 
 def _s(env_name, dotted, default):
-    """Scalar: env var (string) wins, then site config, then default."""
+    """Scalar: env var wins, then in-app override, then site config, then default."""
     v = os.environ.get(env_name) if env_name else None
     if v is not None:
         return v
+    if dotted in _overrides:
+        return _overrides[dotted]
     y = _y(dotted)
     return y if y is not None else default
 
@@ -55,15 +63,21 @@ def _bool(env_name, dotted, default):
     v = os.environ.get(env_name) if env_name else None
     if v is not None:
         return v == "1"
+    if dotted in _overrides:
+        return bool(_overrides[dotted])
     y = _y(dotted)
     return bool(y) if y is not None else default
 
 
 def _list(env_name, dotted, default):
-    """List: comma-string env var wins, then site-config list, then default."""
+    """List: comma-string env var wins, then in-app override, then site config."""
     v = os.environ.get(env_name) if env_name else None
     if v is not None:
         return [x.strip() for x in v.split(",") if x.strip()]
+    if dotted in _overrides:
+        ov = _overrides[dotted]
+        return list(ov) if isinstance(ov, list) else \
+            [x.strip() for x in str(ov).split(",") if x.strip()]
     y = _y(dotted)
     return list(y) if y is not None else list(default)
 
@@ -211,7 +225,7 @@ ENDPOINT_RULES = _y("endpoint_rules", []) or []
 # ---- event/alert bookkeeping (generic) ----------------------------------
 EVENT_SUPPRESS = 600
 ALERT_COOLDOWN = 1800
-ALERT_MIN_SEVERITY = os.environ.get("SECWATCH_ALERT_MIN_SEVERITY", "high")
+ALERT_MIN_SEVERITY = _s("SECWATCH_ALERT_MIN_SEVERITY", "alerting.min_severity", "high")
 # Anti-noise: these rules still BAN + record to the dashboard, but do NOT push a
 # Discord alert on their own. They're the constant background of blocked internet
 # scanning (secret-file probes, path scans, floods, hits on privileged endpoints
@@ -379,6 +393,9 @@ def discord_webhook_url() -> str:
     url = os.environ.get("SECWATCH_DISCORD_WEBHOOK_URL", "").strip()
     if url:
         return url
+    ov = str(_overrides.get("alerting.discord_webhook_url", "")).strip()  # Settings page
+    if ov:
+        return ov
     cfg_url = (_y("alerting.discord_webhook_url") or "").strip()
     if cfg_url:
         return cfg_url
@@ -397,3 +414,46 @@ def discord_webhook_url() -> str:
         except OSError:
             continue
     return ""
+
+
+# ---- in-app Settings: live reload ---------------------------------------
+# Dotted keys the Settings page can hot-swap WITHOUT a restart (read fresh on
+# each use — per-event detection, per-call LLM/alerting). Anything editable but
+# NOT here (feature loops, listen port) needs a restart to take effect.
+SETTING_LIVE_KEYS = {
+    "alerting.quiet_rules", "alerting.quiet_except_private", "alerting.min_severity",
+    "alerting.discord_webhook_url", "ban.enabled",
+    "thresholds.rate_limit", "thresholds.scan_4xx_limit", "thresholds.bot_min_reqs",
+    "thresholds.stuff_limit", "thresholds.secret_probe_ban",
+    "llm.base_url", "llm.model", "llm.api_key", "llm.json_mode",
+    "llm.temperature", "llm.max_tokens", "llm.alert_threat", "cve.severities",
+}
+
+
+def reload_live():
+    """Re-read in-app overrides and hot-swap the live-safe settings into module
+    globals. Called after a Settings save. Keys not in SETTING_LIVE_KEYS still
+    persist but need a restart — the API tells the UI which."""
+    global _overrides, ALERT_QUIET_RULES, ALERT_QUIET_EXCEPT_PRIVATE, \
+        ALERT_MIN_SEVERITY, AUTOBAN, RATE_LIMIT, SCAN_4XX_LIMIT, BOT_MIN_REQS, \
+        STUFF_LIMIT, SECRET_PROBE_BAN, LLM_BASE_URL, LLM_MODEL, LLM_API_KEY, \
+        LLM_JSON_MODE, LLM_TEMPERATURE, LLM_MAX_TOKENS, LLM_ALERT_THREAT, CVE_SEVERITIES
+    _overrides = _settings.load_overrides()
+    ALERT_QUIET_RULES = set(_list("SECWATCH_ALERT_QUIET_RULES", "alerting.quiet_rules",
+        ["secret_probe", "scan", "flood", "privileged_access"]))
+    ALERT_QUIET_EXCEPT_PRIVATE = _bool(None, "alerting.quiet_except_private", True)
+    ALERT_MIN_SEVERITY = _s("SECWATCH_ALERT_MIN_SEVERITY", "alerting.min_severity", "high")
+    AUTOBAN = _bool("SECWATCH_AUTOBAN", "ban.enabled", True)
+    RATE_LIMIT = int(_s(None, "thresholds.rate_limit", 300))
+    SCAN_4XX_LIMIT = int(_s(None, "thresholds.scan_4xx_limit", 20))
+    BOT_MIN_REQS = int(_s(None, "thresholds.bot_min_reqs", 30))
+    STUFF_LIMIT = int(_s(None, "thresholds.stuff_limit", 12))
+    SECRET_PROBE_BAN = _bool("SECWATCH_SECRET_PROBE_BAN", "thresholds.secret_probe_ban", True)
+    LLM_BASE_URL = _s("SECWATCH_LLM_BASE_URL", "llm.base_url", "http://127.0.0.1:11434/v1")
+    LLM_MODEL = _s("SECWATCH_LLM_MODEL", "llm.model", "your-model")
+    LLM_API_KEY = _s("SECWATCH_LLM_API_KEY", "llm.api_key", "")
+    LLM_JSON_MODE = _bool("SECWATCH_LLM_JSON_MODE", "llm.json_mode", True)
+    LLM_TEMPERATURE = float(_s(None, "llm.temperature", "0.2"))
+    LLM_MAX_TOKENS = int(_s(None, "llm.max_tokens", "2000"))
+    LLM_ALERT_THREAT = _s("SECWATCH_LLM_ALERT_THREAT", "llm.alert_threat", "elevated")
+    CVE_SEVERITIES = _s("SECWATCH_CVE_SEVERITIES", "cve.severities", "HIGH,CRITICAL")

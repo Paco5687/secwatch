@@ -2,3 +2,4 @@ fastapi
 uvicorn[standard]
 pyyaml
 python-multipart
+cryptography>=41
