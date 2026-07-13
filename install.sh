@@ -61,6 +61,12 @@ $RUN .venv/bin/pip install -q -r requirements.txt
 # ---- 4. configure + auto-start the service ------------------------------
 set -- --non-interactive --force --port "${SECWATCH_PORT:-8931}"
 [ "${SECWATCH_NO_START:-0}" = "1" ] && set -- "$@" --no-start || set -- "$@" --start
-[ "${SECWATCH_NO_AUTH:-0}" = "1" ] && set -- "$@" --no-auth
-[ -n "${SECWATCH_ADMIN_PASSWORD:-}" ] && set -- "$@" --admin-password "${SECWATCH_ADMIN_PASSWORD}"
+if [ -n "${SECWATCH_JOIN_URL:-}" ]; then
+  # cluster enrollment: no dashboard login by default, join after config
+  set -- "$@" --no-auth --cluster-role "${SECWATCH_CLUSTER_ROLE:-peer}" \
+             --join-url "$SECWATCH_JOIN_URL" --join-secret "${SECWATCH_JOIN_SECRET:-}"
+else
+  [ "${SECWATCH_NO_AUTH:-0}" = "1" ] && set -- "$@" --no-auth
+  [ -n "${SECWATCH_ADMIN_PASSWORD:-}" ] && set -- "$@" --admin-password "${SECWATCH_ADMIN_PASSWORD}"
+fi
 $RUN .venv/bin/python -m secwatch.install "$@"

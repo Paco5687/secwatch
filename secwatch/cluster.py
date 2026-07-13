@@ -199,50 +199,25 @@ def consume_enroll_token(tok):
 
 
 def install_script(role):
-    """The shell installer served by /install.sh — clones the repo, sets up a
-    venv + systemd unit, writes the cluster role, and auto-joins. Runs as root."""
+    """The shell installer served by /install.sh — clones the repo, then hands off
+    to install.sh (single source of truth for prereqs/venv/deps/service) in
+    cluster-join mode. Runs as root."""
     return f"""#!/bin/sh
 # secwatch cluster enrollment — installs secwatch on this host and joins the
-# cluster. Runs as root (systemd unit + prereqs). Review before running.
+# cluster. Runs as root. Review before running.
 set -e
 REPO="{config.CLUSTER_INSTALL_REPO}"
 DIR="{config.CLUSTER_INSTALL_DIR}"
-JOIN_URL="{config.CLUSTER_URL}"
-SECRET="{secret().decode()}"
-ROLE="{role}"
 
-echo "[secwatch] enrolling this host as a $ROLE ..."
-if ! command -v git >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; then
-  if command -v apt-get >/dev/null 2>&1; then
-    apt-get update -qq && apt-get install -y -qq git python3 python3-venv
-  else
-    echo "[secwatch] please install git + python3 + python3-venv, then re-run"; exit 1
-  fi
-fi
+echo "[secwatch] enrolling this host as a {role} ..."
+# git is needed to fetch the code; install.sh handles python3/venv/deps.
+command -v git >/dev/null 2>&1 || {{ command -v apt-get >/dev/null 2>&1 && apt-get update -qq && apt-get install -y -qq git; }}
 if [ -d "$DIR/.git" ]; then git -C "$DIR" pull -q; else git clone -q "$REPO" "$DIR"; fi
 cd "$DIR"
-python3 -m venv .venv
-.venv/bin/pip install -q -r requirements.txt
-IP="$(hostname -I 2>/dev/null | awk '{{print $1}}')"
-if [ ! -f secwatch.yaml ]; then
-  printf 'cluster:\\n  role: %s\\n  url: http://%s:8931\\n' "$ROLE" "$IP" > secwatch.yaml
-  chmod 600 secwatch.yaml
-fi
-.venv/bin/python -m secwatch.cluster join "$JOIN_URL" "$SECRET"
-cat > /etc/systemd/system/secwatch.service <<UNIT
-[Unit]
-Description=secwatch security monitor
-After=network-online.target
-[Service]
-WorkingDirectory=$DIR
-ExecStart=$DIR/.venv/bin/python -m secwatch.main
-Restart=on-failure
-[Install]
-WantedBy=multi-user.target
-UNIT
-systemctl daemon-reload
-systemctl enable --now secwatch
-echo "[secwatch] done — enrolled as $ROLE. Dashboard on http://$IP:8931/"
+SECWATCH_JOIN_URL="{config.CLUSTER_URL}" \\
+SECWATCH_JOIN_SECRET="{secret().decode()}" \\
+SECWATCH_CLUSTER_ROLE="{role}" \\
+  sh ./install.sh
 """
 
 

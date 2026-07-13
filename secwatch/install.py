@@ -14,7 +14,7 @@ from pathlib import Path
 
 import yaml
 
-from . import auth, autodetect
+from . import auth, autodetect, config
 from .config import BASE_DIR
 
 
@@ -52,6 +52,10 @@ def main(argv=None):
                     help="install + start the systemd service without prompting")
     ap.add_argument("--no-start", action="store_true",
                     help="just write config + unit, don't install/start the service")
+    ap.add_argument("--cluster-role", choices=("standalone", "peer", "leaf"),
+                    help="join this node to a cluster in this role")
+    ap.add_argument("--join-url", help="a cluster peer's URL to join")
+    ap.add_argument("--join-secret", help="the cluster's shared secret")
     args = ap.parse_args(argv)
     ni = args.non_interactive
 
@@ -71,6 +75,10 @@ def main(argv=None):
         print("  •", n, file=sys.stderr)
 
     draft["paths"]["dashboard_url"] = f"http://{_primary_ip()}:{port}/"
+
+    # cluster enrollment (from the 'Add a device' one-liner)
+    if args.cluster_role and args.cluster_role != "standalone":
+        draft["cluster"] = {"role": args.cluster_role, "url": ""}  # url auto-detects
 
     # auth
     generated_pw = None
@@ -110,6 +118,13 @@ def main(argv=None):
     unit_path = BASE_DIR / "secwatch.service"
     unit_path.write_text(unit)
     print(f"✓ wrote {unit_path}", file=sys.stderr)
+
+    # join the cluster now (before the service starts, so it has its roster)
+    if args.join_url:
+        from . import cluster
+        config.CLUSTER_ROLE = args.cluster_role or "peer"   # so node_identity is right
+        ok, msg = cluster.join(args.join_url, args.join_secret)
+        print(f"{'✓ cluster: ' if ok else '! cluster join: '}{msg}", file=sys.stderr)
 
     ip = _primary_ip()
     if args.no_start:
