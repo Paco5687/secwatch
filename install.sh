@@ -15,14 +15,19 @@ say() { printf '[secwatch] %s\n' "$1"; }
 need=""
 command -v git >/dev/null 2>&1 || need="$need git"
 command -v python3 >/dev/null 2>&1 || need="$need python3"
-# `python3 -m venv` needs the venv module (a separate package on Debian/Ubuntu)
-python3 -m venv --help >/dev/null 2>&1 || need="$need venv"
+# `venv --help` passes even without ensurepip — test ensurepip itself (the bit
+# Debian/Ubuntu split into a separate python3-venv package).
+python3 -c "import ensurepip" >/dev/null 2>&1 || need="$need venv"
 
 if [ -n "$need" ]; then
   say "installing prerequisites:$need"
   SUDO=""; [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1 && SUDO="sudo"
   if command -v apt-get >/dev/null 2>&1; then
-    $SUDO apt-get update -qq && $SUDO apt-get install -y -qq git python3 python3-venv
+    # newer distros need the version-specific venv package (e.g. python3.14-venv)
+    PYVER=$(python3 -c 'import sys;print("%d.%d"%sys.version_info[:2])' 2>/dev/null || true)
+    $SUDO apt-get update -qq
+    $SUDO apt-get install -y -qq git python3 python3-venv python3-pip
+    [ -n "$PYVER" ] && $SUDO apt-get install -y -qq "python${PYVER}-venv" 2>/dev/null || true
   elif command -v dnf >/dev/null 2>&1; then
     $SUDO dnf install -y -q git python3 python3-pip
   elif command -v pacman >/dev/null 2>&1; then
@@ -34,8 +39,10 @@ if [ -n "$need" ]; then
 fi
 
 # ---- 2. virtualenv + dependencies ---------------------------------------
-if [ ! -d .venv ]; then
+# (re)create the venv if it's missing OR broken (a half-made .venv has no pip)
+if [ ! -x .venv/bin/pip ]; then
   say "creating virtualenv (.venv)"
+  rm -rf .venv
   python3 -m venv .venv
 fi
 say "installing Python dependencies"
