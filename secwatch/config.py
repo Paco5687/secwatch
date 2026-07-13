@@ -96,6 +96,25 @@ CORE_URL = os.environ.get("SECWATCH_CORE_URL", "http://127.0.0.1:8931")
 # Shared token for agent→core event ingestion (POST /api/ingest). Empty disables.
 INGEST_TOKEN = os.environ.get("SECWATCH_INGEST_TOKEN", "")
 
+# ---- crowd-sourced threat intel (OPT-IN, off by default) ----------------
+# Optionally share confirmed bans (attacker IP + rule + timestamp ONLY — never
+# your traffic or data) with a self-hostable aggregator, and pull its consensus
+# community blocklist to pre-emptively block IPs many installs have flagged.
+CROWD_ENABLED = _bool("SECWATCH_CROWD", "crowd.enabled", False)
+CROWD_URL = _s("SECWATCH_CROWD_URL", "crowd.url", "")
+CROWD_TOKEN = _s("SECWATCH_CROWD_TOKEN", "crowd.token", "")
+CROWD_SHARE = _bool(None, "crowd.share", True)      # report my bans upstream
+CROWD_CONSUME = _bool(None, "crowd.consume", True)  # pull + block the community list
+CROWD_PULL_INTERVAL = int(_s(None, "crowd.pull_interval", 3600))
+CROWD_BAN_TTL_HOURS = float(_s(None, "crowd.ban_ttl_hours", 72))
+# --- aggregator side (only used when running `python -m secwatch.aggregator`) ---
+AGG_DB = str(BASE_DIR / "data" / "aggregator.db")
+AGG_TOKEN = os.environ.get("SECWATCH_AGG_TOKEN", "")        # required to run
+AGG_PORT = int(os.environ.get("SECWATCH_AGG_PORT", "8950"))
+AGG_CONSENSUS = int(os.environ.get("SECWATCH_AGG_CONSENSUS", "3"))  # distinct reporters
+AGG_WINDOW_DAYS = int(os.environ.get("SECWATCH_AGG_WINDOW_DAYS", "7"))
+AGG_MAX_REPORTS_PER_MIN = int(os.environ.get("SECWATCH_AGG_RATE", "120"))
+
 # ---- network trust (site-specific) --------------------------------------
 # Trusted = exempt from detection/ban. Keep this NARROW (server subnet + admin
 # hosts), not the whole LAN, so a compromised device elsewhere is still watched.

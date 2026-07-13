@@ -31,8 +31,7 @@ homelabbers actually want into one readable, low-dependency tool**:
 | **Trivy / Grype** | image CVE scanning | ✅ + CISA-KEV "actively exploited" flag |
 | *(nothing common)* | plain-English traffic analysis | ✅ optional local-LLM analyst |
 
-¹ CrowdSec's crowd-sourced blocklist is its superpower; a community-intel option
-for secwatch is on the roadmap. **If you already run and love CrowdSec or Wazuh,
+¹ secwatch now has an OPTIONAL, self-hostable crowd-intel layer too (see CROWD.md) — off by default, attacker-IPs-only. **If you already run and love CrowdSec or Wazuh,
 keep them** — secwatch is for people who find that stack too much and want one
 small thing they can read the source of. Honest scope: it's a monitoring and
 mitigation *aid*, not a firewall or a patch manager.

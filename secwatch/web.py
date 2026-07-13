@@ -109,6 +109,41 @@ async def _host_is_catchall(host):
     return 200 <= code < 300
 
 
+async def crowd_task():
+    """Ship queued ban reports upstream and pull + apply the community blocklist
+    (opt-in; a no-op unless crowd.enabled)."""
+    if not config.CROWD_ENABLED or not config.CROWD_URL:
+        return
+    from . import crowd
+    log.info("crowd intel on: %s (share=%s consume=%s)",
+             config.CROWD_URL, config.CROWD_SHARE, config.CROWD_CONSUME)
+    last_pull = 0.0
+    while True:
+        await asyncio.sleep(30)
+        try:
+            if config.CROWD_SHARE:
+                await asyncio.to_thread(crowd.ship_outbox)
+            if config.CROWD_CONSUME and time.time() - last_pull >= config.CROWD_PULL_INTERVAL:
+                last_pull = time.time()
+                ips = await asyncio.to_thread(crowd.fetch_blocklist)
+                if ips:
+                    conn = db.connect()
+                    try:
+                        applied = 0
+                        for entry in ips:
+                            ok, _ = ban.add(conn, entry["ip"], rule="community",
+                                            reason=f"community blocklist "
+                                                   f"({entry.get('reporters', '?')} reporters)",
+                                            ttl_hours=config.CROWD_BAN_TTL_HOURS,
+                                            banned_by="community")
+                            applied += 1 if ok else 0
+                        log.info("crowd: applied %d/%d community IPs", applied, len(ips))
+                    finally:
+                        conn.close()
+        except Exception as exc:
+            log.error("crowd task: %s", exc)
+
+
 async def edge_silence_task(engine):
     """Alert if the Traefik access log stops advancing — proxy down, or an
     attacker who owns Traefik disabled logging to blind the monitor."""
@@ -231,6 +266,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(catchall_task(engine), name="catchall"),
         asyncio.create_task(edge_silence_task(engine), name="edge_silence"),
         asyncio.create_task(healthwatch.HealthWatcher(engine, conn).run(), name="health"),
+        asyncio.create_task(crowd_task(), name="crowd"),
     ]
     if config.MODE == "all":
         tasks += [

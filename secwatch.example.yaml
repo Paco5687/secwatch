@@ -125,7 +125,7 @@ auth:
   session_ttl: 86400
   # Requests from these sources skip auth (a fronting proxy already authed them);
   # localhost is trusted by default so a co-located reverse proxy keeps working.
-  trust_proxy_from: [127.0.0.1/32, ::1/128]
+  trust_proxy_from: ["127.0.0.1/32", "::1/128"]
   max_fails: 8
   lockout_secs: 300
 
@@ -170,3 +170,15 @@ active_mitigations:
   - >-
     dockerproxy is the read-only Docker API proxy in front of Traefik
     (intentional infra). It is expected to exist.
+
+# Crowd-sourced threat intel (opt-in, off by default). See CROWD.md.
+# Share confirmed attacker IPs with a self-hostable aggregator + pull its
+# consensus community blocklist. Only attacker IP + rule + timestamp are shared.
+crowd:
+  enabled: false
+  url: ""                 # your self-hosted aggregator, e.g. https://agg.example
+  token: ""               # shared secret
+  share: true             # report my bans (attacker IPs only)
+  consume: true           # pull + block the consensus community list
+  pull_interval: 3600
+  ban_ttl_hours: 72       # community bans expire (self-heal)

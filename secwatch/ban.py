@@ -47,6 +47,10 @@ def add(conn, ip, rule="manual", reason="", ttl_hours=None, banned_by="auto"):
     conn.commit()
     write_file(conn)
     log.info("banned %s (%s) for %.1fh", ip, rule, ttl / 3600)
+    # share upstream (opt-in) — but never re-report community-sourced bans (loop)
+    if banned_by != "community":
+        from . import crowd
+        crowd.report(ip, rule)
     return True, "banned"
 
 
