@@ -130,6 +130,48 @@ def node_identity():
             "url": config.CLUSTER_URL}
 
 
+# ---- in-app setup (called by the dashboard, no CLI needed) ---------------
+
+def init_cluster():
+    """Create this node's cluster secret if absent. Returns the secret string
+    (the operator copies it to the nodes that will join)."""
+    if not secret():
+        _set_secret(_generate_secret())
+    return secret().decode()
+
+
+def join(peer_url, secret_str):
+    """Programmatic join (in-app). Stores the secret, announces to the peer, and
+    learns the roster. Returns (ok, message)."""
+    peer_url = (peer_url or "").strip().rstrip("/")
+    if secret_str:
+        _set_secret(secret_str.strip().encode())
+    if not secret():
+        return False, "no cluster secret provided"
+    if not peer_url:
+        return False, "a peer URL is required to join"
+    try:
+        resp = peer_request(peer_url, "/api/cluster/join", {"node": node_identity()})
+    except Exception as exc:
+        return False, (f"couldn't reach {peer_url}: {exc}. Check the URL, that the "
+                       f"peer uses the SAME secret, and that this node can reach it.")
+    peer = resp.get("node", {})
+    add_peer(peer.get("name"), peer_url, peer.get("role", "peer"))
+    for p in resp.get("peers", []):
+        add_peer(p.get("name"), p.get("url"), p.get("role", "peer"))
+    log.info("joined cluster via %s", peer_url)
+    return True, "Joined — %d peer(s) known." % len(load_peers())
+
+
+def leave_cluster():
+    """Drop the secret + roster; this node goes standalone (set role separately)."""
+    for f in (config.CLUSTER_STORE, config.CLUSTER_SECRET_FILE):
+        try:
+            f.unlink()
+        except OSError:
+            pass
+
+
 # ---- ban gossip ----------------------------------------------------------
 # Bans converge two ways so a firewalled/leaf box (outbound-only) still works:
 #   push — the origin immediately POSTs new bans to reachable peers (low latency)

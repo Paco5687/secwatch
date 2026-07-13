@@ -122,6 +122,10 @@ nodes gossip bans so **a hit on one hardens all**, while any peer can view the
 whole fleet. Membership is by explicit join with a shared secret (never
 auto-discovery), and inter-node requests are HMAC-signed.
 
+**Easiest: the dashboard's Cluster tab** — pick a role, click **Create cluster**
+(copy the secret) or **Join cluster** (paste a peer's URL + secret). No CLI, no
+restart. Or from the shell:
+
 ```bash
 # on the first node:
 python -m secwatch.cluster init          # prints the shared secret

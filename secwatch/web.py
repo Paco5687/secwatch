@@ -350,6 +350,11 @@ app = FastAPI(title="secwatch", lifespan=lifespan)
 
 # ---- standalone auth (only active when config.AUTH_ENABLED) --------------
 _AUTH_OPEN_PATHS = {"/healthz", "/login", "/auth/login", "/auth/logout", "/favicon.ico"}
+# Inter-node cluster RPCs — self-authenticate via HMAC, so they bypass the
+# dashboard login gate. Management endpoints are deliberately NOT here.
+_CLUSTER_HMAC_PATHS = {"/api/cluster/ping", "/api/cluster/join", "/api/cluster/roster",
+                       "/api/cluster/ban", "/api/cluster/blocklist",
+                       "/api/cluster/event", "/api/cluster/query"}
 _login_fails = {}   # ip -> [fail_count, locked_until]
 
 
@@ -379,8 +384,10 @@ async def _auth_gate(request: Request, call_next):
     if not config.AUTH_ENABLED:
         return await call_next(request)
     path = request.url.path
-    # cluster RPCs authenticate via HMAC (shared secret), not the dashboard login
-    if path in _AUTH_OPEN_PATHS or path.startswith("/api/cluster/"):
+    # inter-node cluster RPCs authenticate via HMAC (shared secret), not the
+    # dashboard login. The cluster *management* endpoints (config/setup/reveal/
+    # peers/overview) are NOT here — they require normal dashboard auth.
+    if path in _AUTH_OPEN_PATHS or path in _CLUSTER_HMAC_PATHS:
         return await call_next(request)
     # a fronting proxy that already authenticated the user (e.g. localhost)
     if _source_trusted(request.client.host if request.client else ""):
@@ -1116,6 +1123,79 @@ async def cluster_overview():
                           "high_24h": 0, "bans": 0, "note": "leaf (push-only)"})
     return {"enabled": True, "role": config.CLUSTER_ROLE, "self": config.CLUSTER_NAME,
             "nodes": nodes}
+
+
+def _ensure_cluster_tasks():
+    """Spawn the cluster gossip + leaf tasks live (so enabling a cluster from the
+    UI needs no restart). Idempotent."""
+    if not config.CLUSTER_ENABLED:
+        return
+    handles = getattr(app.state, "cluster_handles", {})
+    for name, coro in (("cluster", cluster_task), ("cluster_leaf", leaf_forward_task)):
+        t = handles.get(name)
+        if t is None or t.done():
+            nt = asyncio.create_task(coro(), name=name)
+            nt.add_done_callback(_watch)
+            handles[name] = nt
+    app.state.cluster_handles = handles
+
+
+@app.get("/api/cluster/config")
+def cluster_config():
+    return {"name": config.CLUSTER_NAME, "role": config.CLUSTER_ROLE,
+            "url": config.CLUSTER_URL, "enabled": config.CLUSTER_ENABLED,
+            "secret_set": bool(cluster.secret()),
+            "gossip_secs": config.CLUSTER_GOSSIP_SECS,
+            "peers": [{"name": p["name"], "url": p.get("url", ""),
+                       "role": p.get("role", "peer")} for p in cluster.load_peers()]}
+
+
+@app.post("/api/cluster/setup")
+async def cluster_setup(payload: dict = Body(...)):
+    # async so _ensure_cluster_tasks() can spawn gossip tasks on the event loop
+    """In-app cluster setup — no CLI. action: create | join | leave | role."""
+    from . import settings as st
+    action = payload.get("action")
+    role = payload.get("role")
+    if role in ("standalone", "peer", "leaf"):
+        st.set_value("cluster.role", role)
+    if payload.get("url") is not None:
+        st.set_value("cluster.url", str(payload["url"]).strip())
+    config.reload_live()   # so node_identity reflects the new role/url before we act
+
+    if action == "create":
+        secret = cluster.init_cluster()
+        _ensure_cluster_tasks()
+        return {"ok": True, "secret": secret,
+                "message": "Cluster created. Copy the secret to the nodes that will join."}
+    if action == "join":
+        ok, msg = await asyncio.to_thread(cluster.join, payload.get("peer_url"),
+                                          payload.get("secret"))
+        config.reload_live()
+        if ok:
+            _ensure_cluster_tasks()
+        return {"ok": ok, "message": msg}
+    if action == "leave":
+        cluster.leave_cluster()
+        st.set_value("cluster.role", "standalone")
+        config.reload_live()
+        return {"ok": True, "message": "Left the cluster (now standalone)."}
+    if action == "role":
+        _ensure_cluster_tasks()
+        return {"ok": True, "message": "Saved."}
+    return {"ok": False, "message": "unknown action"}
+
+
+@app.post("/api/cluster/reveal")
+def cluster_reveal():
+    """Return the shared secret so the admin can add more nodes (dashboard-authed)."""
+    return {"secret": cluster.secret().decode() if cluster.secret() else ""}
+
+
+@app.post("/api/cluster/peer/remove")
+def cluster_peer_remove(payload: dict = Body(...)):
+    cluster.remove_peer(str(payload.get("name", "")))
+    return {"ok": True}
 
 
 @app.get("/api/devices")

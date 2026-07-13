@@ -571,41 +571,116 @@ VIEWS.system = {
 };
 
 /* ---------- cluster ---------- */
+function nodeCards(nodes) {
+  const dot = n => n.online === false ? `<span class="dot off"></span>`
+    : n.online === null ? `<span class="dot" style="background:var(--muted)"></span>`
+    : `<span class="dot on"></span>`;
+  return nodes.map(n => {
+    const node = n.node || {};
+    const status = n.online === false ? "offline" : n.online === null ? "leaf" : "online";
+    return `<div class="card catcard" style="cursor:default">
+      <div class="catname">${dot(n)}${esc(node.name || "?")} ${n.self ? `<span class="tag">this node</span>` : ""}${node.role === "leaf" ? `<span class="tag">leaf</span>` : ""}</div>
+      <div class="catstate ${n.high_24h ? "st-alert" : "st-secure"}">${status.toUpperCase()}</div>
+      <div class="catsub">${n.events_24h || 0} events · ${n.high_24h || 0} high · ${n.bans || 0} bans (24h)</div>
+    </div>`;
+  }).join("");
+}
+function secretBox(secret) {
+  return `<div class="formrow"><input type="text" readonly value="${esc(secret)}" id="secretVal" style="width:340px" onclick="this.select()">
+    <button id="copySecret">Copy</button>
+    <span class="rules">share this with nodes that will join — treat it like a password</span></div>`;
+}
+function wireCopy() {
+  const c = $("copySecret"); if (!c) return;
+  c.addEventListener("click", () => { const i = $("secretVal"); i.select();
+    try { navigator.clipboard.writeText(i.value); c.textContent = "Copied ✓"; } catch (e) { document.execCommand("copy"); } });
+}
+function renderClusterSetup(cfg) {
+  $("view").innerHTML =
+    `<div class="card" style="margin-bottom:12px"><div class="sethelp">
+       Join this box to a <b>peer-to-peer cluster</b> — nodes share bans (a hit on one hardens all)
+       and you can view the whole fleet from any peer. No central hub. Every node keeps defending itself.
+     </div></div>
+     <div class="card" style="margin-bottom:12px"><h2>This node</h2>
+       <div class="setrow"><div class="setlabel"><b>Role</b><div class="sethelp">
+         <b>peer</b> = full member (internal/trusted). <b>leaf</b> = push-only for an exposed box
+         (contributes + pulls bans, but isn't readable by peers).</div></div>
+         <div class="setctl"><select id="cRole">
+           <option value="peer">peer</option><option value="leaf">leaf</option></select></div></div>
+       <div class="setrow" id="cUrlRow"><div class="setlabel"><b>This node's URL</b>
+         <div class="sethelp">How peers reach it, e.g. http://THIS-IP:8931 (a leaf can leave blank).</div></div>
+         <div class="setctl"><input type="text" id="cUrl" placeholder="http://THIS-IP:8931" value="${esc(cfg.url || "")}" style="width:220px"></div></div>
+     </div>
+     <div class="gridrow" style="grid-template-columns:1fr 1fr">
+       <div class="card"><h2>Create a new cluster</h2>
+         <div class="sethelp">Start a cluster with this node as the first member. You'll get a secret to add others.</div>
+         <div class="formrow"><button id="cCreate">Create cluster</button><span id="cCreateMsg"></span></div>
+         <div id="cCreatedSecret"></div></div>
+       <div class="card"><h2>Join an existing cluster</h2>
+         <div class="formcol"><label>A peer's URL<input type="text" id="cJoinUrl" placeholder="http://PEER-IP:8931"></label>
+           <label style="margin-top:8px">Shared secret<input type="password" id="cJoinSecret" placeholder="paste the secret"></label></div>
+         <div class="formrow"><button id="cJoin">Join cluster</button><span id="cJoinMsg"></span></div></div>
+     </div>`;
+  const roleSel = $("cRole"); roleSel.value = (cfg.role === "leaf") ? "leaf" : "peer";
+  const syncUrl = () => $("cUrlRow").style.display = roleSel.value === "leaf" ? "none" : "flex";
+  roleSel.addEventListener("change", syncUrl); syncUrl();
+  $("cCreate").addEventListener("click", async () => {
+    $("cCreate").disabled = true; $("cCreateMsg").textContent = "Creating…";
+    const res = await jpost("api/cluster/setup", {action: "create", role: roleSel.value, url: $("cUrl").value});
+    $("cCreate").disabled = false; $("cCreateMsg").textContent = res.message || "";
+    $("cCreateMsg").className = res.ok ? "msg-ok" : "msg-err";
+    if (res.ok && res.secret) { $("cCreatedSecret").innerHTML = secretBox(res.secret); wireCopy();
+      $("navCluster").style.display = ""; }
+  });
+  $("cJoin").addEventListener("click", async () => {
+    $("cJoin").disabled = true; $("cJoinMsg").textContent = "Joining…";
+    const res = await jpost("api/cluster/setup", {action: "join", role: roleSel.value, url: $("cUrl").value,
+      peer_url: $("cJoinUrl").value, secret: $("cJoinSecret").value});
+    $("cJoin").disabled = false; $("cJoinMsg").textContent = res.message || "";
+    $("cJoinMsg").className = res.ok ? "msg-ok" : "msg-err";
+    if (res.ok) setTimeout(() => route(), 1200);
+  });
+}
 VIEWS.cluster = {
   title: "Cluster",
   async render() {
-    const d = await jget("api/cluster/overview");
-    if (!d.enabled) {
-      $("view").innerHTML = `<div class="card"><div class="empty">This node isn't in a cluster (role: <b>${esc(d.role || "standalone")}</b>).<br><br>
-        Form a P2P cluster so boxes share bans and you can view them all from here:<br>
-        <span class="mono">python -m secwatch.cluster init</span> on the first node, then
-        <span class="mono">python -m secwatch.cluster join &lt;url&gt; &lt;secret&gt;</span> on the others.<br>
-        Set <span class="mono">cluster.role</span> (peer | leaf) in Settings/YAML.</div></div>`;
-      return;
-    }
+    const cfg = await jget("api/cluster/config");
+    if (!cfg.enabled) { renderClusterSetup(cfg); return; }
+    const d = await jget("api/cluster/overview").catch(() => ({nodes: [], self: cfg.name}));
     const nodes = d.nodes || [];
-    const dot = n => n.online === false ? `<span class="dot off"></span>`
-      : n.online === null ? `<span class="dot" style="background:var(--muted)"></span>`
-      : `<span class="dot on"></span>`;
-    const cards = nodes.map(n => {
-      const node = n.node || {};
-      const status = n.online === false ? "offline" : n.online === null ? "leaf" : "online";
-      return `<div class="card catcard" style="cursor:default">
-        <div class="catname">${dot(n)}${esc(node.name || "?")} ${n.self ? `<span class="tag">this node</span>` : ""}${node.role === "leaf" ? `<span class="tag">leaf</span>` : ""}</div>
-        <div class="catstate ${n.high_24h ? "st-alert" : "st-secure"}">${status.toUpperCase()}</div>
-        <div class="catsub">${n.events_24h || 0} events · ${n.high_24h || 0} high · ${n.bans || 0} bans (24h)</div>
-      </div>`;
-    }).join("");
     const totBans = nodes.reduce((a, n) => a + (n.bans || 0), 0);
     const totHigh = nodes.reduce((a, n) => a + (n.high_24h || 0), 0);
+    const peerRows = (cfg.peers || []).map(p =>
+      `<div class="checkrow"><span class="cname">${esc(p.name)}</span>
+        <span class="cmsg">${esc(p.role)} · ${esc(p.url || "—")}</span>
+        <div class="spacer" style="flex:1"></div>
+        <button class="danger" data-rmpeer="${esc(p.name)}">remove</button></div>`).join("");
     $("view").innerHTML =
       `<div class="card" id="threatBanner">
          <span class="statuslamp ${totHigh ? "lamp-elevated" : "lamp-low"}"><i></i>${nodes.length} NODE${nodes.length > 1 ? "S" : ""}</span>
-         <div class="headline">P2P cluster · every node defends itself and shares bans. You're viewing from <b>${esc(d.self)}</b>.</div>
+         <div class="headline">P2P cluster · every node defends itself and shares bans. Viewing from <b>${esc(cfg.name)}</b> (${esc(cfg.role)}).</div>
          <div class="quick"><span><b>${nodes.filter(n => n.online !== false).length}</b>reachable</span>
            <span><b>${totHigh}</b>high (24h)</span><span><b>${totBans}</b>bans</span></div>
        </div>
-       <div class="catgrid">${cards}</div>`;
+       <div class="catgrid">${nodeCards(nodes)}</div>
+       <div class="card" style="margin-top:12px"><div class="cardhead"><h2>Manage cluster</h2>
+         <div class="spacer"></div><button id="cReveal">Show secret (add a node)</button>
+         <button id="cLeave" class="danger">Leave cluster</button></div>
+         <div id="cSecretReveal"></div>
+         ${peerRows ? `<div style="margin-top:10px">${peerRows}</div>` : `<div class="empty">No peers yet — use the secret to join another node.</div>`}
+       </div>`;
+    $("cReveal").addEventListener("click", async () => {
+      const r = await jpost("api/cluster/reveal");
+      $("cSecretReveal").innerHTML = secretBox(r.secret || ""); wireCopy();
+    });
+    $("cLeave").addEventListener("click", async () => {
+      if (!confirm("Leave the cluster? This node keeps defending itself but stops sharing bans.")) return;
+      await jpost("api/cluster/setup", {action: "leave"});
+      $("navCluster").style.display = "none"; nav("overview");
+    });
+    document.querySelectorAll("[data-rmpeer]").forEach(el => el.addEventListener("click", async () => {
+      await jpost("api/cluster/peer/remove", {name: el.dataset.rmpeer}); route();
+    }));
   },
 };
 

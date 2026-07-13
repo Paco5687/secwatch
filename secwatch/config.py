@@ -463,8 +463,12 @@ def reload_live():
     global _overrides, ALERT_QUIET_RULES, ALERT_QUIET_EXCEPT_PRIVATE, \
         ALERT_MIN_SEVERITY, AUTOBAN, RATE_LIMIT, SCAN_4XX_LIMIT, BOT_MIN_REQS, \
         STUFF_LIMIT, SECRET_PROBE_BAN, LLM_BASE_URL, LLM_MODEL, LLM_API_KEY, \
-        LLM_JSON_MODE, LLM_TEMPERATURE, LLM_MAX_TOKENS, LLM_ALERT_THREAT, CVE_SEVERITIES
+        LLM_JSON_MODE, LLM_TEMPERATURE, LLM_MAX_TOKENS, LLM_ALERT_THREAT, \
+        CVE_SEVERITIES, CLUSTER_ROLE, CLUSTER_ENABLED, CLUSTER_URL
     _overrides = _settings.load_overrides()
+    CLUSTER_ROLE = _s("SECWATCH_CLUSTER_ROLE", "cluster.role", "standalone")
+    CLUSTER_ENABLED = CLUSTER_ROLE in ("peer", "leaf")
+    CLUSTER_URL = _s("SECWATCH_CLUSTER_URL", "cluster.url", "")
     ALERT_QUIET_RULES = set(_list("SECWATCH_ALERT_QUIET_RULES", "alerting.quiet_rules",
         ["secret_probe", "scan", "flood", "privileged_access"]))
     ALERT_QUIET_EXCEPT_PRIVATE = _bool(None, "alerting.quiet_except_private", True)
