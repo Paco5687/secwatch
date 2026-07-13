@@ -71,13 +71,15 @@ mitigation *aid*, not a firewall or a patch manager.
 curl -fsSL https://raw.githubusercontent.com/Paco5687/secwatch/main/install.sh | sudo sh
 ```
 
-It installs prerequisites (git/python3/venv), sets up a virtualenv, writes config
-(port `8931` + an auto-generated admin password it prints), and **installs +
-starts the systemd service** — no prompts. It ends with
-`✅ secwatch is ACTIVE — open http://IP:8931/` and the login it generated.
+It uses **uv** to fetch a self-contained, pinned Python (so the host's Python
+version/packaging doesn't matter — falls back to the system `python3` if uv can't
+be used), sets up a virtualenv, writes config (port `8931` + an auto-generated
+admin password it prints), and **installs + starts the systemd service** — no
+prompts. It ends with `✅ secwatch is ACTIVE — open http://IP:8931/`.
 
 Customize with env vars: `SECWATCH_PORT`, `SECWATCH_ADMIN_PASSWORD`,
-`SECWATCH_NO_AUTH=1` (open dashboard on a trusted LAN), `SECWATCH_NO_START=1`.
+`SECWATCH_NO_AUTH=1` (open dashboard on a trusted LAN), `SECWATCH_NO_START=1`,
+`SECWATCH_NO_UV=1` (skip uv, use the system Python).
 
 Prefer to review the code first? Clone and run the same installer:
 

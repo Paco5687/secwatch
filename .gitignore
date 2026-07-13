@@ -12,3 +12,4 @@ __pycache__/
 secwatch.yaml
 .secwatch-canary-*
 secwatch.service
+.uv/
