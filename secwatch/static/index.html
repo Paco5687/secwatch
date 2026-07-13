@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en" data-theme="ops">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>secwatch</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%2322d3ee' d='M12 1 3 5v6c0 5.6 3.8 10.7 9 12 5.2-1.3 9-6.4 9-12V5l-9-4zm0 2.2 7 3.1V11c0 4.5-3 8.9-7 10-4-1.1-7-5.5-7-10V6.3l7-3.1z'/%3E%3Cpath fill='%2322d3ee' d='M11 7h2v6h-2zm0 8h2v2h-2z'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="static/style.css?v=__V__">
+</head>
+<body>
+<div id="crt"></div>
+<div id="app">
+  <nav id="side">
+    <div id="logo"><span class="accent">sec</span>watch<span class="cursor">_</span></div>
+    <a class="navitem" data-view="overview"><span class="glyph">◉</span>Overview</a>
+    <a class="navitem" data-view="events"><span class="glyph">≡</span>Events<span class="badge" id="navHigh" style="display:none"></span></a>
+    <a class="navitem" data-view="bans"><span class="glyph">⊘</span>Bans</a>
+    <a class="navitem" data-view="sources"><span class="glyph">☰</span>Log sources</a>
+    <a class="navitem" data-view="host"><span class="glyph">⌂</span>Host / EDR</a>
+    <a class="navitem" data-view="vulns"><span class="glyph">⚠</span>Vulnerabilities</a>
+    <a class="navitem" data-view="analysis" id="navAnalysis"><span class="glyph">✦</span>AI analysis</a>
+    <a class="navitem" data-view="system"><span class="glyph">♥</span>System</a>
+    <div class="foot">
+      v__V__ <span class="upd" id="updNote"></span>
+    </div>
+  </nav>
+
+  <main id="main">
+    <div id="topbar">
+      <div id="viewTitle">Overview</div>
+      <div class="spacer"></div>
+      <select id="hours">
+        <option value="6">Last 6 hours</option>
+        <option value="24" selected>Last 24 hours</option>
+        <option value="72">Last 3 days</option>
+        <option value="168">Last 7 days</option>
+      </select>
+      <select id="theme" title="Theme">
+        <option value="ops">Theme: Ops</option>
+        <option value="terminal">Theme: Terminal</option>
+        <option value="light">Theme: Light</option>
+      </select>
+      <form method="post" action="auth/logout" id="logoutForm" style="display:none;margin:0">
+        <button type="submit" title="Sign out">Sign out</button>
+      </form>
+    </div>
+
+    <div id="view"></div>
+    <footer id="foot"></footer>
+  </main>
+</div>
+
+<div id="overlay"></div>
+<aside id="dossier"></aside>
+<div id="tooltip"></div>
+
+<script src="static/app.js?v=__V__" defer></script>
+</body>
+</html>

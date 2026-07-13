@@ -4,16 +4,19 @@ import contextlib
 import json
 import logging
 import os
+import socket
 import time
+from pathlib import Path
 
 import ipaddress
 
 from fastapi import Body, FastAPI, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.staticfiles import StaticFiles
 
-from . import (alert, auth, auditwatch, authwatch, ban, config, cvewatch, db,
-               detect, dockerwatch, fimwatch, healthwatch, hostwatch,
-               llm_analysis, logsources, parser, procwatch, tailer)
+from . import (__version__, alert, auth, auditwatch, authwatch, ban, config,
+               cvewatch, db, detect, dockerwatch, fimwatch, healthwatch,
+               hostwatch, llm_analysis, logsources, parser, procwatch, tailer)
 
 log = logging.getLogger("secwatch.web")
 
@@ -459,20 +462,52 @@ def summary(hours: int = Query(24, ge=1, le=336)):
         conn.close()
 
 
+def _rule_category(rule):
+    """Bucket a rule into a dashboard category: edge / host / files / cve / system.
+    Unknown rules (custom endpoint_rules) are access-log based → edge."""
+    r = rule or ""
+    if r in ("webshell_dropped", "ransomware_canary") or r.startswith("fim"):
+        return "files"
+    if r.startswith("cve"):
+        return "cve"
+    if r.startswith("health"):
+        return "system"
+    if (r.startswith(("ssh", "host_", "docker_", "egress", "exec_", "proc",
+                      "audit", "persist"))
+            or r in ("sudo", "new_user", "priv_group", "unit_failed")):
+        return "host"
+    return "edge"
+
+
 @app.get("/api/events")
 def events(hours: int = Query(24, ge=1, le=336),
            severity: str = Query("", pattern="^(|info|low|medium|high)$"),
-           limit: int = Query(200, ge=1, le=1000)):
+           ip: str = Query(""), rule: str = Query(""), q: str = Query(""),
+           cat: str = Query(""), limit: int = Query(200, ge=1, le=1000)):
     conn = db.connect(readonly=True)
     try:
-        q = "SELECT * FROM events WHERE ts >= ?"
+        sql = "SELECT * FROM events WHERE ts >= ?"
         params = [time.time() - hours * 3600]
         if severity:
-            q += " AND severity = ?"
+            sql += " AND severity = ?"
             params.append(severity)
-        q += " ORDER BY ts DESC LIMIT ?"
-        params.append(limit)
-        return {"events": [dict(r) for r in conn.execute(q, params)]}
+        if ip:
+            sql += " AND ip = ?"
+            params.append(ip)
+        if rule:
+            sql += " AND rule = ?"
+            params.append(rule)
+        if q:
+            sql += " AND (path LIKE ? OR detail LIKE ? OR host LIKE ? OR rule LIKE ?)"
+            params += [f"%{q}%"] * 4
+        sql += " ORDER BY ts DESC LIMIT ?"
+        # category is derived from rule names in python, so over-fetch then trim
+        cats = {c.strip() for c in cat.split(",") if c.strip()}
+        params.append(limit * 5 if cats else limit)
+        rows = [dict(r) for r in conn.execute(sql, params)]
+        if cats:
+            rows = [r for r in rows if _rule_category(r["rule"]) in cats][:limit]
+        return {"events": rows}
     finally:
         conn.close()
 
@@ -610,6 +645,131 @@ async def ingest(request: Request, payload: dict = Body(...)):
     return {"ok": True}
 
 
+@app.get("/api/uiconfig")
+def uiconfig():
+    """Boot config for the SPA (mutation header, features, version)."""
+    return {
+        "version": __version__,
+        "mut_header": config.PROXY_MUTATION_HEADER,
+        "auth": config.AUTH_ENABLED,
+        "llm": config.LLM_ANALYSIS,
+        "cve": config.CVE_SCAN,
+        "crowd": config.CROWD_ENABLED,
+        "audit": config.AUDIT_ENABLED,
+        "mode": config.MODE,
+        "ban_actuator": config.BAN_ACTUATOR,
+        "autoban": config.AUTOBAN,
+        "sources": len(config.LOG_SOURCES),
+        "update_available": healthwatch.STATE.get("update_available", False),
+    }
+
+
+@app.get("/api/overview")
+def overview(hours: int = Query(24, ge=1, le=336)):
+    """Category roll-up + threat level for the Overview status board."""
+    conn = db.connect(readonly=True)
+    try:
+        now = time.time()
+        since = now - hours * 3600
+        cats = {k: {"count": 0, "high": 0, "medium": 0, "low": 0, "top": ""}
+                for k in ("edge", "host", "files", "cve", "system")}
+        top_rule = {}
+        for r in conn.execute(
+                "SELECT rule, severity, COUNT(*) c FROM events "
+                "WHERE ts >= ? AND severity != 'info' GROUP BY rule, severity",
+                (since,)):
+            c = cats[_rule_category(r["rule"])]
+            c["count"] += r["c"]
+            c[r["severity"]] = c.get(r["severity"], 0) + r["c"]
+            key = _rule_category(r["rule"])
+            top_rule.setdefault(key, {})
+            top_rule[key][r["rule"]] = top_rule[key].get(r["rule"], 0) + r["c"]
+        for k, rules in top_rule.items():
+            cats[k]["top"] = max(rules, key=rules.get)
+        bans_n = conn.execute("SELECT COUNT(*) c FROM bans WHERE expires > ?",
+                              (now,)).fetchone()["c"]
+        kev = conn.execute(
+            "SELECT COUNT(*) c FROM vulnerabilities WHERE in_kev = 1").fetchone()["c"]
+        recent = [dict(r) for r in conn.execute(
+            "SELECT ts, ip, rule, severity FROM events WHERE ts >= ? AND "
+            "severity != 'info' ORDER BY ts DESC LIMIT 8", (since,))]
+        # threat level: recent LLM verdict if available, else derived from events
+        threat = {"level": "low", "headline": "", "source": "derived"}
+        row = conn.execute("SELECT ts, threat_level, headline FROM analyses "
+                           "ORDER BY ts DESC LIMIT 1").fetchone()
+        if row and now - row["ts"] < 24 * 3600:
+            threat = {"level": row["threat_level"], "headline": row["headline"],
+                      "source": "analysis", "ts": row["ts"]}
+        else:
+            highs = sum(c["high"] for c in cats.values())
+            meds = sum(c["medium"] for c in cats.values())
+            if highs:
+                threat = {"level": "elevated", "source": "derived",
+                          "headline": f"{highs} high-severity event"
+                                      f"{'s' if highs > 1 else ''} in the last "
+                                      f"{hours}h — review Events."}
+            elif meds:
+                threat = {"level": "guarded", "source": "derived",
+                          "headline": f"{meds} medium-severity event"
+                                      f"{'s' if meds > 1 else ''} in the last "
+                                      f"{hours}h; nothing high."}
+            else:
+                threat["headline"] = "No notable security events in the window."
+        return {"hours": hours, "categories": cats, "threat": threat,
+                "bans": bans_n, "kev": kev,
+                "health_ok": healthwatch.STATE.get("status") in ("ok", "starting"),
+                "recent": recent}
+    finally:
+        conn.close()
+
+
+@app.get("/api/ipinfo")
+async def ipinfo(ip: str = Query(..., min_length=3, max_length=64)):
+    """Everything we know about one IP — the drill-down dossier."""
+    def _lookup():
+        conn = db.connect(readonly=True)
+        try:
+            now = time.time()
+            since_min = int(now // 60) - 24 * 60
+            mins = conn.execute(
+                "SELECT minute, requests, s4xx FROM ip_minute "
+                "WHERE ip = ? AND minute >= ? ORDER BY minute",
+                (ip, since_min)).fetchall()
+            # 15-minute buckets for the sparkline
+            buckets = {}
+            req = err = 0
+            for m in mins:
+                b = m["minute"] // 15
+                cur = buckets.setdefault(b, [0, 0])
+                cur[0] += m["requests"]; cur[1] += m["s4xx"]
+                req += m["requests"]; err += m["s4xx"]
+            series = [{"t": b * 900, "r": v[0], "e": v[1]}
+                      for b, v in sorted(buckets.items())]
+            evs = [dict(r) for r in conn.execute(
+                "SELECT ts, rule, severity, host, path, detail, count "
+                "FROM events WHERE ip = ? ORDER BY ts DESC LIMIT 60", (ip,))]
+            brow = conn.execute(
+                "SELECT * FROM bans WHERE ip = ? AND expires > ?",
+                (ip, now)).fetchone()
+            last = max([m["minute"] * 60 for m in mins[-1:]] +
+                       [e["ts"] for e in evs[:1]] + [0])
+            return {"ip": ip, "hours": 24, "requests": req, "s4xx": err,
+                    "series": series, "events": evs,
+                    "ban": dict(brow) if brow else None,
+                    "trusted": detect.is_trusted(ip), "last_seen": last}
+        finally:
+            conn.close()
+
+    out = await asyncio.to_thread(_lookup)
+    try:
+        host, _, _ = await asyncio.wait_for(
+            asyncio.to_thread(socket.gethostbyaddr, ip), timeout=1.5)
+        out["rdns"] = host
+    except (OSError, asyncio.TimeoutError):
+        out["rdns"] = ""
+    return out
+
+
 @app.get("/api/health")
 def api_health():
     return healthwatch.STATE
@@ -620,621 +780,16 @@ def healthz():
     return {"ok": True}
 
 
+# ---- static SPA (secwatch/static/) ---------------------------------------
+_STATIC_DIR = Path(__file__).resolve().parent / "static"
+# version-stamped at import so asset URLs (?v=) bust browser caches on upgrade
+_INDEX_HTML = (_STATIC_DIR / "index.html").read_text().replace("__V__", __version__)
+
+
 @app.get("/", response_class=HTMLResponse)
 def index():
-    return DASHBOARD_HTML
+    return HTMLResponse(_INDEX_HTML, headers={"Cache-Control": "no-cache"})
 
 
-@app.get("/app.js")
-def dashboard_js():
-    mut = ({config.PROXY_MUTATION_HEADER: "1"}
-           if config.PROXY_MUTATION_HEADER else {})
-    js = DASHBOARD_JS.replace("__MUT__", json.dumps(mut))
-    return Response(js, media_type="text/javascript")
+app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
 
-
-DASHBOARD_HTML = """<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>secwatch</title>
-<style>
-:root {
-  --surface: #fcfcfb; --plane: #f9f9f7;
-  --ink: #0b0b0b; --ink2: #52514e; --muted: #898781;
-  --grid: #e1e0d9; --baseline: #c3c2b7; --ring: rgba(11,11,11,0.10);
-  --series: #2a78d6;
-  --crit: #d03b3b; --serious: #ec835a; --warn: #fab219; --good: #0ca30c;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --surface: #1a1a19; --plane: #0d0d0d;
-    --ink: #ffffff; --ink2: #c3c2b7; --muted: #898781;
-    --grid: #2c2c2a; --baseline: #383835; --ring: rgba(255,255,255,0.10);
-    --series: #3987e5;
-  }
-}
-* { box-sizing: border-box; margin: 0; }
-body {
-  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
-  background: var(--plane); color: var(--ink); padding: 20px;
-}
-h1 { font-size: 17px; font-weight: 650; }
-h1 span { color: var(--muted); font-weight: 400; }
-header { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
-header .spacer { flex: 1; }
-select {
-  font: inherit; color: var(--ink); background: var(--surface);
-  border: 1px solid var(--ring); border-radius: 8px; padding: 5px 8px;
-}
-.card {
-  background: var(--surface); border: 1px solid var(--ring);
-  border-radius: 12px; padding: 14px 16px;
-}
-.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 12px; }
-.tile .v { font-size: 26px; font-weight: 650; margin-top: 2px; }
-.tile .l { color: var(--ink2); font-size: 12px; }
-.tile .s { color: var(--muted); font-size: 12px; margin-top: 2px; }
-.grid2 { display: grid; grid-template-columns: 2fr 1fr; gap: 12px; margin-bottom: 12px; }
-@media (max-width: 900px) { .grid2 { grid-template-columns: 1fr; } }
-.card h2 { font-size: 13px; font-weight: 600; color: var(--ink2); margin-bottom: 10px; }
-svg text { font: 11px system-ui, sans-serif; fill: var(--muted); }
-.bar { fill: var(--series); }
-.bar:hover { opacity: 0.8; }
-#tooltip {
-  position: fixed; pointer-events: none; display: none; z-index: 10;
-  background: var(--surface); border: 1px solid var(--ring); border-radius: 8px;
-  padding: 6px 10px; font-size: 12px; box-shadow: 0 4px 14px rgba(0,0,0,.18);
-}
-#tooltip .t { color: var(--muted); }
-table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
-th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
-     color: var(--muted); font-weight: 600; padding: 6px 8px; border-bottom: 1px solid var(--grid); }
-td { padding: 6px 8px; border-bottom: 1px solid var(--grid); vertical-align: top; }
-tr:last-child td { border-bottom: none; }
-td.path { max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-          font-family: ui-monospace, monospace; font-size: 12px; color: var(--ink2); }
-.chip { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; }
-.chip i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
-.sev-high i { background: var(--crit); } .sev-high { color: var(--crit); }
-.sev-medium i { background: var(--serious); } .sev-medium { color: var(--serious); }
-.sev-low i { background: var(--warn); } .sev-low { color: var(--warn); }
-.sev-info i { background: var(--muted); } .sev-info { color: var(--muted); }
-.list { display: flex; flex-direction: column; gap: 6px; }
-.list .row { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; }
-.list .row b { font-weight: 600; font-family: ui-monospace, monospace; font-size: 12px; }
-.list .row .n { color: var(--ink2); font-variant-numeric: tabular-nums; }
-.list .rules { color: var(--muted); font-size: 11px; }
-.empty { color: var(--muted); font-size: 13px; padding: 12px 0; }
-button {
-  font: inherit; font-size: 12px; color: var(--ink2); background: none;
-  border: 1px solid var(--ring); border-radius: 6px; padding: 2px 8px; cursor: pointer;
-}
-button:hover { color: var(--crit); border-color: var(--crit); }
-.banform { display: flex; gap: 6px; margin-top: 8px; }
-.banform input {
-  flex: 1; min-width: 0; font: inherit; font-size: 12px; color: var(--ink);
-  background: var(--plane); border: 1px solid var(--ring); border-radius: 6px; padding: 4px 8px;
-}
-.analysis-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
-.threat { display: inline-flex; align-items: center; gap: 6px; font-weight: 650; font-size: 13px;
-          padding: 3px 10px; border-radius: 999px; border: 1px solid var(--ring); }
-.threat i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
-.threat-low i { background: var(--good); } .threat-low { color: var(--good); }
-.threat-guarded i { background: var(--warn); } .threat-guarded { color: var(--warn); }
-.threat-elevated i { background: var(--serious); } .threat-elevated { color: var(--serious); }
-.threat-high i, .threat-critical i { background: var(--crit); }
-.threat-high, .threat-critical { color: var(--crit); }
-.analysis-head .when { color: var(--muted); font-size: 12px; }
-#addSourceBtn:hover, .analysis-head #addSourceBtn:hover { color: var(--good); border-color: var(--good); }
-#scanBtn:hover { color: var(--series); border-color: var(--series); }
-.scanrow { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--grid); flex-wrap: wrap; }
-.scanrow:last-child { border-bottom: none; }
-.scanrow .meta { flex: 1; min-width: 240px; }
-.scanrow .samp { font-family: ui-monospace, monospace; font-size: 11px; color: var(--muted);
-                 overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
-.scanrow button { white-space: nowrap; }
-.scanrow button:hover { color: var(--good); border-color: var(--good); }
-.srcgrid { display: grid; grid-template-columns: 1fr 2fr 1fr; gap: 10px; }
-@media (max-width: 700px) { .srcgrid { grid-template-columns: 1fr; } }
-#addSourceForm label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--ink2); }
-#addSourceForm input, #addSourceForm select {
-  font: inherit; font-size: 13px; color: var(--ink); background: var(--plane);
-  border: 1px solid var(--ring); border-radius: 6px; padding: 5px 8px; width: 100%;
-}
-#addSourceForm code { font-family: ui-monospace, monospace; font-size: 11px; }
-.tag { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
-       padding: 1px 6px; border-radius: 5px; background: var(--grid); color: var(--ink2); margin-left: 6px; }
-.dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 5px; }
-.dot.on { background: var(--good); } .dot.off { background: var(--muted); }
-.analysis-head button:hover { color: var(--series); border-color: var(--series); }
-.headline { font-size: 15px; font-weight: 600; margin: 4px 0 6px; }
-.summary { color: var(--ink2); margin-bottom: 12px; }
-.finding { border-left: 3px solid var(--muted); padding: 2px 0 2px 10px; margin-bottom: 9px; }
-.finding.sev-high { border-color: var(--crit); } .finding.sev-medium { border-color: var(--serious); }
-.finding.sev-low { border-color: var(--warn); } .finding.sev-info { border-color: var(--muted); }
-.finding .ft { font-weight: 600; }
-.finding .fe { color: var(--muted); font-size: 12px; font-family: ui-monospace, monospace; }
-.finding .fa { color: var(--ink2); font-size: 13px; }
-.recs { list-style: none; padding: 0; }
-.recs li { padding: 5px 0; border-bottom: 1px solid var(--grid); display: flex; gap: 8px; }
-.recs li:last-child { border: none; }
-.pri { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
-       padding: 1px 6px; border-radius: 5px; height: fit-content; white-space: nowrap; }
-.pri-now { background: var(--crit); color: #fff; } .pri-soon { background: var(--serious); color: #fff; }
-.pri-consider { background: var(--grid); color: var(--ink2); }
-.subhead { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase;
-           letter-spacing: .04em; margin: 12px 0 6px; }
-.ai-note { color: var(--muted); font-size: 11px; margin-top: 10px; }
-footer { color: var(--muted); font-size: 12px; margin-top: 14px; }
-</style>
-</head>
-<body>
-<header>
-  <h1>secwatch <span>· edge security monitor</span></h1>
-  <div class="spacer"></div>
-  <select id="hours">
-    <option value="6">Last 6 hours</option>
-    <option value="24" selected>Last 24 hours</option>
-    <option value="72">Last 3 days</option>
-    <option value="168">Last 7 days</option>
-  </select>
-  <select id="sevFilter">
-    <option value="">All severities</option>
-    <option value="high">High</option>
-    <option value="medium">Medium</option>
-    <option value="low">Low</option>
-    <option value="info">Info</option>
-  </select>
-  <form method="post" action="auth/logout" id="logoutForm" style="display:none;margin:0">
-    <button type="submit" title="Sign out">Sign out</button>
-  </form>
-</header>
-
-<div class="tiles">
-  <div class="card tile"><div class="l">Requests</div><div class="v" id="tReq">–</div><div class="s" id="tErr"></div></div>
-  <div class="card tile"><div class="l">Unique IPs</div><div class="v" id="tIps">–</div><div class="s">&nbsp;</div></div>
-  <div class="card tile"><div class="l">Security events</div><div class="v" id="tEv">–</div><div class="s" id="tEvS"></div></div>
-  <div class="card tile"><div class="l">High severity</div><div class="v" id="tHigh">–</div><div class="s" id="tHighS"></div></div>
-</div>
-
-<div class="card" id="cveCard" style="margin-bottom:12px">
-  <div class="analysis-head">
-    <span class="threat threat-low" id="cveBadge"><i></i>—</span>
-    <h2 style="margin:0">Vulnerabilities (running images)</h2>
-    <span class="when" id="cveWhen"></span>
-  </div>
-  <div id="cveBody"><div class="empty">No scan yet.</div></div>
-</div>
-
-<div class="card" id="analysisCard" style="margin-bottom:12px">
-  <div class="analysis-head">
-    <span class="threat threat-guarded" id="threat"><i></i>—</span>
-    <h2 style="margin:0">AI traffic analysis</h2>
-    <span class="when" id="analysisWhen"></span>
-    <div class="spacer" style="flex:1"></div>
-    <button id="analyzeBtn">Analyze now</button>
-  </div>
-  <div id="analysisBody"><div class="empty">No analysis yet — click “Analyze now”.</div></div>
-</div>
-
-<div class="card" id="sourcesCard" style="margin-bottom:12px">
-  <div class="analysis-head">
-    <h2 style="margin:0">Log sources</h2>
-    <span class="when" id="sourcesWhen"></span>
-    <div class="spacer" style="flex:1"></div>
-    <button id="scanBtn">Scan for logs</button>
-    <button id="addSourceBtn">+ Add local app</button>
-  </div>
-  <div style="overflow-x:auto">
-  <table>
-    <thead><tr><th>Name</th><th>Path</th><th>Format</th><th>Lines</th><th>Last activity</th><th></th></tr></thead>
-    <tbody id="sourceRows"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
-  </table>
-  </div>
-  <div id="scanResults" style="display:none;margin-top:12px;border-top:1px solid var(--grid);padding-top:10px"></div>
-  <form id="addSourceForm" style="display:none;margin-top:12px;border-top:1px solid var(--grid);padding-top:12px">
-    <div class="srcgrid">
-      <label>Name<input id="srcName" placeholder="gitea" spellcheck="false"></label>
-      <label>Log file path<input id="srcPath" placeholder="/var/log/nginx/gitea.access.log" spellcheck="false"></label>
-      <label>Format
-        <select id="srcType">
-          <option value="traefik">traefik (JSON)</option>
-          <option value="nginx">nginx (combined)</option>
-          <option value="caddy">caddy (JSON)</option>
-          <option value="regex">regex (custom)</option>
-        </select>
-      </label>
-    </div>
-    <label id="srcRegexWrap" style="display:none;margin-top:8px">Regex (named groups; needs <code>(?P&lt;ip&gt;…)</code>)
-      <input id="srcRegex" placeholder="(?P<ip>\\S+) - \"(?P<method>\\S+) (?P<path>\\S+)[^\"]*\" (?P<status>\\d+) \"(?P<ua>[^\"]*)\"" spellcheck="false">
-    </label>
-    <div style="display:flex;gap:8px;align-items:center;margin-top:10px">
-      <button type="submit" id="srcSave">Add source</button>
-      <button type="button" id="srcCancel">Cancel</button>
-      <span id="srcMsg" class="rules"></span>
-    </div>
-  </form>
-</div>
-
-<div class="grid2">
-  <div class="card">
-    <h2 id="chartTitle">Requests</h2>
-    <svg id="chart" width="100%" height="180" role="img" aria-label="Requests over time"></svg>
-  </div>
-  <div class="card">
-    <h2>Top offenders</h2>
-    <div class="list" id="offenders"><div class="empty">No events yet.</div></div>
-    <h2 style="margin-top:14px">Top talkers</h2>
-    <div class="list" id="talkers"><div class="empty">–</div></div>
-    <h2 style="margin-top:14px">Active bans <span id="autobanState" style="font-weight:400"></span></h2>
-    <div class="list" id="bans"><div class="empty">–</div></div>
-    <div class="banform">
-      <input id="banIp" placeholder="IP to ban" spellcheck="false">
-      <button id="banBtn">Ban 24h</button>
-    </div>
-  </div>
-</div>
-
-<div class="card">
-  <h2>Events</h2>
-  <div style="overflow-x:auto">
-  <table>
-    <thead><tr><th>Time</th><th>Severity</th><th>Rule</th><th>IP</th><th>Host</th><th>Path</th><th>Detail</th><th>N</th></tr></thead>
-    <tbody id="eventRows"><tr><td colspan="8" class="empty">Loading…</td></tr></tbody>
-  </table>
-  </div>
-</div>
-
-<div id="tooltip"></div>
-<footer id="foot"></footer>
-
-<script src="app.js" defer></script>
-</body>
-</html>
-"""
-
-# Served as a separate file: a strict-CSP proxy (script-src 'self')
-# forbids inline scripts, so the dashboard must not rely on any.
-DASHBOARD_JS = """
-const MUT = __MUT__;   // optional header added to mutating requests (proxy CSRF)
-const $ = id => document.getElementById(id);
-const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-const fmtN = n => n >= 1e6 ? (n/1e6).toFixed(1)+"M" : n >= 1e4 ? Math.round(n/1e3)+"k" : n >= 1000 ? (n/1e3).toFixed(1)+"k" : String(n);
-const fmtT = ts => new Date(ts*1000).toLocaleString([], {month:"short", day:"numeric", hour:"2-digit", minute:"2-digit"});
-
-function chip(sev) { return `<span class="chip sev-${esc(sev)}"><i></i>${esc(sev)}</span>`; }
-
-function drawChart(series, hours) {
-  const svg = $("chart"), W = svg.clientWidth || 700, H = 180;
-  const padL = 36, padR = 6, padT = 8, padB = 20;
-  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
-  if (!series.length) { svg.innerHTML = `<text x="${W/2}" y="${H/2}" text-anchor="middle">no traffic data yet</text>`; return; }
-  const max = Math.max(...series.map(d => d.r), 1);
-  const iw = W - padL - padR, ih = H - padT - padB;
-  const n = series.length, bw = Math.max(2, iw/n - 2);
-  let g = "";
-  const ticks = 3;
-  for (let i = 1; i <= ticks; i++) {
-    const v = max * i / ticks, y = padT + ih - ih * i / ticks;
-    g += `<line x1="${padL}" y1="${y}" x2="${W-padR}" y2="${y}" stroke="var(--grid)" stroke-width="1"/>`;
-    g += `<text x="${padL-6}" y="${y+4}" text-anchor="end">${fmtN(Math.round(v))}</text>`;
-  }
-  const t0 = series[0].t, t1 = series[n-1].t, span = Math.max(t1 - t0, 1);
-  series.forEach(d => {
-    const x = padL + (n === 1 ? 0 : (d.t - t0) / span * (iw - bw));
-    const h = Math.max(d.r > 0 ? 2 : 0, d.r / max * ih);
-    g += `<rect class="bar" x="${x}" y="${padT+ih-h}" width="${bw}" height="${h}" rx="2"
-           data-t="${d.t}" data-r="${d.r}" data-e="${d.e}"/>`;
-  });
-  g += `<line x1="${padL}" y1="${padT+ih}" x2="${W-padR}" y2="${padT+ih}" stroke="var(--baseline)" stroke-width="1"/>`;
-  const labelEvery = Math.ceil(n / 6);
-  series.forEach((d, i) => {
-    if (i % labelEvery) return;
-    const x = padL + (n === 1 ? 0 : (d.t - t0) / span * (iw - bw));
-    const opts = hours > 48 ? {month:"short", day:"numeric"} : {hour:"2-digit", minute:"2-digit"};
-    g += `<text x="${x}" y="${H-4}">${new Date(d.t*1000).toLocaleString([], opts)}</text>`;
-  });
-  svg.innerHTML = g;
-  const tip = $("tooltip");
-  svg.querySelectorAll(".bar").forEach(b => {
-    b.addEventListener("mousemove", e => {
-      tip.style.display = "block";
-      tip.style.left = Math.min(e.clientX + 12, window.innerWidth - 180) + "px";
-      tip.style.top = (e.clientY - 40) + "px";
-      tip.innerHTML = `<div class="t">${fmtT(+b.dataset.t)}</div>` +
-        `<b>${(+b.dataset.r).toLocaleString()}</b> requests` +
-        (+b.dataset.e ? ` · ${(+b.dataset.e).toLocaleString()} errors` : "");
-    });
-    b.addEventListener("mouseleave", () => tip.style.display = "none");
-  });
-}
-
-async function refresh() {
-  const hours = $("hours").value, sev = $("sevFilter").value;
-  try {
-    const [s, ev, bn] = await Promise.all([
-      fetch(`api/summary?hours=${hours}`).then(r => r.json()),
-      fetch(`api/events?hours=${hours}&severity=${sev}&limit=300`).then(r => r.json()),
-      fetch(`api/bans`).then(r => r.json()),
-    ]);
-    $("autobanState").textContent = bn.autoban ? "· auto-ban on" : "· auto-ban OFF";
-    $("bans").innerHTML = bn.bans.length ? bn.bans.map(b =>
-      `<div class="row"><span><b>${esc(b.ip)}</b> <span class="rules">${esc(b.rule)}` +
-      ` · until ${fmtT(b.expires)}</span></span>` +
-      `<button data-unban="${esc(b.ip)}">unban</button></div>`).join("")
-      : `<div class="empty">None.</div>`;
-    if (s.auth) $("logoutForm").style.display = "block";
-    $("tReq").textContent = s.requests.toLocaleString();
-    $("tErr").textContent = `${s.errors4xx.toLocaleString()} × 4xx · ${s.errors5xx.toLocaleString()} × 5xx`;
-    $("tIps").textContent = s.unique_ips.toLocaleString();
-    const sv = s.severities, tot = Object.values(sv).reduce((a,b) => a+b, 0);
-    $("tEv").textContent = tot.toLocaleString();
-    $("tEvS").textContent = ["medium","low","info"].filter(k => sv[k]).map(k => `${sv[k]} ${k}`).join(" · ") || " ";
-    $("tHigh").textContent = (sv.high || 0).toLocaleString();
-    $("tHigh").style.color = sv.high ? "var(--crit)" : "";
-    $("tHighS").textContent = sv.high ? "needs review" : "all clear";
-    $("chartTitle").textContent = `Requests · ${s.bucket_minutes}-min buckets`;
-    drawChart(s.series, +hours);
-
-    $("offenders").innerHTML = s.offenders.length ? s.offenders.map(o =>
-      `<div class="row"><span><b>${esc(o.ip)}</b> <span class="rules">${esc(o.rules)}</span></span>` +
-      `<span class="n">${o.events} ev</span></div>`).join("")
-      : `<div class="empty">No events in window.</div>`;
-    $("talkers").innerHTML = s.top_ips.length ? s.top_ips.map(t =>
-      `<div class="row"><b>${esc(t.ip)}</b><span class="n">${fmtN(t.requests)} req` +
-      (t.s4xx ? ` · ${fmtN(t.s4xx)} 4xx` : "") + `</span></div>`).join("")
-      : `<div class="empty">–</div>`;
-
-    $("eventRows").innerHTML = ev.events.length ? ev.events.map(e =>
-      `<tr><td style="white-space:nowrap">${fmtT(e.ts)}</td><td>${chip(e.severity)}</td>` +
-      `<td>${esc(e.rule)}</td><td style="font-family:ui-monospace,monospace;font-size:12px">${esc(e.ip)}</td>` +
-      `<td>${esc(e.host)}</td><td class="path" title="${esc(e.path)}">${esc(e.path)}</td>` +
-      `<td>${esc(e.detail)}${e.alerted ? " 🔔" : ""}</td><td>${e.count}</td></tr>`).join("")
-      : `<tr><td colspan="8" class="empty">No events — quiet out there.</td></tr>`;
-    $("foot").textContent = `Updated ${new Date().toLocaleTimeString()} · refreshes every 30s`;
-  } catch (err) {
-    $("foot").textContent = `Refresh failed: ${err}`;
-  }
-}
-$("bans").addEventListener("click", async (e) => {
-  const ip = e.target.dataset && e.target.dataset.unban;
-  if (!ip) return;
-  await fetch("api/unban", {method: "POST",
-    headers: {"Content-Type": "application/json", ...MUT},
-    body: JSON.stringify({ip})});
-  refresh();
-});
-$("banBtn").addEventListener("click", async () => {
-  const ip = $("banIp").value.trim();
-  if (!ip) return;
-  const res = await fetch("api/ban", {method: "POST",
-    headers: {"Content-Type": "application/json", ...MUT},
-    body: JSON.stringify({ip})}).then(r => r.json());
-  if (!res.ok) alert(res.message);
-  $("banIp").value = "";
-  refresh();
-});
-const THREAT_LABEL = {low:"Low", guarded:"Guarded", elevated:"Elevated", high:"High", critical:"Critical"};
-function renderAnalysis(a) {
-  if (a && a.enabled === false) {   // LLM analysis is optional / disabled
-    const c = $("analysisCard"); if (c) c.style.display = "none";
-    return;
-  }
-  const badge = $("threat");
-  const lvl = a.threat_level || "guarded";
-  badge.className = "threat threat-" + lvl;
-  badge.innerHTML = `<i></i>${THREAT_LABEL[lvl] || lvl}`;
-  $("analysisWhen").textContent = a.running ? "analyzing…"
-    : a.ts ? "as of " + fmtT(a.ts) : "";
-  $("analyzeBtn").disabled = !!a.running;
-  $("analyzeBtn").textContent = a.running ? "Analyzing…" : "Analyze now";
-  if (!a.result) {
-    $("analysisBody").innerHTML = a.last_error
-      ? `<div class="empty">Last run failed: ${esc(a.last_error)}</div>`
-      : `<div class="empty">No analysis yet — click “Analyze now”.</div>`;
-    return;
-  }
-  const r = a.result, m = r._meta || {};
-  const findings = (r.findings || []).map(f =>
-    `<div class="finding sev-${esc(f.severity || "info")}">
-       <div class="ft">${esc(f.title || "")}</div>
-       <div class="fa">${esc(f.assessment || "")}</div>
-       <div class="fe">${esc(f.evidence || "")}</div>
-     </div>`).join("");
-  const recs = (r.hardening_recommendations || []).map(x =>
-    `<li><span class="pri pri-${esc(x.priority || "consider")}">${esc(x.priority || "")}</span>
-       <span><b>${esc(x.action || "")}</b>${x.rationale ? " — " + esc(x.rationale) : ""}</span></li>`).join("");
-  const watch = (r.watch_items || []).map(w => `<li>${esc(w)}</li>`).join("");
-  $("analysisBody").innerHTML =
-    `<div class="headline">${esc(r.headline || a.headline || "")}</div>` +
-    `<div class="summary">${esc(r.traffic_summary || "")}</div>` +
-    (findings ? `<div class="subhead">Findings</div>${findings}` : "") +
-    (recs ? `<div class="subhead">Hardening recommendations</div><ul class="recs">${recs}</ul>` : "") +
-    (watch ? `<div class="subhead">Watch items</div><ul class="recs">${watch.replace(/<li>/g,'<li><span></span>')}</ul>` : "") +
-    `<div class="ai-note">Model: ${esc(m.model || "local")} · ${m.requests_analyzed || "?"} requests analyzed · `
-      + `${m.window_hours || "?"}h window. LLM-generated; verify before acting.</div>`;
-}
-
-async function loadVulns() {
-  try {
-    const v = await fetch("api/vulnerabilities").then(r => r.json());
-    const badge = $("cveBadge");
-    badge.className = "threat " + (v.kev ? "threat-high" : "threat-low");
-    badge.innerHTML = `<i></i>${v.kev ? v.kev + " actively exploited" : "none exploited"}`;
-    if (!v.total) { $("cveBody").innerHTML = `<div class="empty">No findings (or scan pending).</div>`; return; }
-    const byImg = {};
-    for (const r of v.vulnerabilities) {
-      byImg[r.image] = byImg[r.image] || {n: 0, crit: 0, kev: 0};
-      byImg[r.image].n++; if (r.severity === "CRITICAL") byImg[r.image].crit++; if (r.in_kev) byImg[r.image].kev++;
-    }
-    const kevRows = v.vulnerabilities.filter(r => r.in_kev).slice(0, 8).map(r =>
-      `<div class="finding sev-high"><div class="ft">${esc(r.cve)} — ${esc(r.image)}</div>
-       <div class="fa">${esc(r.pkg)} ${esc(r.installed)} · ${r.fixed ? "fix: " + esc(r.fixed) : "no fix yet"}</div></div>`).join("");
-    const imgRows = Object.entries(byImg).sort((a, b) => b[1].kev - a[1].kev || b[1].crit - a[1].crit)
-      .map(([img, s]) => `<div class="row"><span><b style="font-weight:600">${esc(img)}</b></span>
-        <span class="n">${s.n} findings${s.crit ? " · " + s.crit + " critical" : ""}${s.kev ? " · <b style='color:var(--crit)'>" + s.kev + " KEV</b>" : ""}</span></div>`).join("");
-    $("cveBody").innerHTML =
-      `<div class="summary">${v.total} high/critical findings across running images · ` +
-      `<b>${v.kev}</b> on the CISA KEV list (actively exploited in the wild).</div>` +
-      (kevRows ? `<div class="subhead">Actively exploited — patch first</div>${kevRows}` : "") +
-      `<div class="subhead">By image</div><div class="list">${imgRows}</div>` +
-      `<div class="ai-note">Trivy scan cross-referenced with CISA KEV. KEV findings alert; the rest are informational.</div>`;
-  } catch (e) { /* leave prior */ }
-}
-
-const fmtAgo = ts => {
-  if (!ts) return "never";
-  const s = Math.max(0, Date.now()/1000 - ts);
-  if (s < 90) return Math.round(s) + "s ago";
-  if (s < 5400) return Math.round(s/60) + "m ago";
-  if (s < 172800) return Math.round(s/3600) + "h ago";
-  return Math.round(s/86400) + "d ago";
-};
-async function loadSources() {
-  try {
-    const d = await fetch("api/logsources").then(r => r.json());
-    const rows = (d.sources || []).map(s => {
-      const live = `<span class="dot ${s.live ? "on" : "off"}"></span>`;
-      const tags = (s.primary ? `<span class="tag">primary</span>` : "") +
-                   (s.managed || s.primary ? "" : `<span class="tag">yaml</span>`);
-      const rm = s.managed
-        ? `<button data-rmsrc="${esc(s.path)}">remove</button>`
-        : `<span class="rules" title="edit secwatch.yaml to change this">—</span>`;
-      return `<tr><td>${live}<b>${esc(s.name)}</b>${tags}</td>` +
-        `<td class="path" title="${esc(s.path)}">${esc(s.path)}</td>` +
-        `<td>${esc(s.type)}</td><td class="n">${(s.records||0).toLocaleString()}</td>` +
-        `<td style="white-space:nowrap">${fmtAgo(s.last_ts)}</td><td>${rm}</td></tr>`;
-    }).join("");
-    $("sourceRows").innerHTML = rows ||
-      `<tr><td colspan="6" class="empty">No sources.</td></tr>`;
-    $("sourcesWhen").textContent = `${(d.sources||[]).length} watched`;
-  } catch (e) { /* leave prior */ }
-}
-$("addSourceBtn").addEventListener("click", () => {
-  const f = $("addSourceForm");
-  f.style.display = f.style.display === "none" ? "block" : "none";
-  $("srcMsg").textContent = "";
-});
-$("srcCancel").addEventListener("click", () => { $("addSourceForm").style.display = "none"; });
-$("srcType").addEventListener("change", () => {
-  $("srcRegexWrap").style.display = $("srcType").value === "regex" ? "flex" : "none";
-});
-$("addSourceForm").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  $("srcSave").disabled = true;
-  $("srcMsg").textContent = "Adding…";
-  const body = {name: $("srcName").value, path: $("srcPath").value,
-                type: $("srcType").value, regex: $("srcRegex").value};
-  const res = await fetch("api/logsources", {method: "POST",
-    headers: {"Content-Type": "application/json", ...MUT},
-    body: JSON.stringify(body)}).then(r => r.json()).catch(() => ({ok:false, message:"request failed"}));
-  $("srcSave").disabled = false;
-  $("srcMsg").textContent = res.message || (res.ok ? "Added." : "Failed.");
-  $("srcMsg").style.color = res.ok ? "var(--good)" : "var(--crit)";
-  if (res.ok) {
-    $("srcName").value = ""; $("srcPath").value = ""; $("srcRegex").value = "";
-    $("addSourceForm").style.display = "none";
-    loadSources();
-  }
-});
-$("sourceRows").addEventListener("click", async (e) => {
-  const path = e.target.dataset && e.target.dataset.rmsrc;
-  if (!path) return;
-  if (!confirm("Stop watching this log source?")) return;
-  await fetch("api/logsources/remove", {method: "POST",
-    headers: {"Content-Type": "application/json", ...MUT},
-    body: JSON.stringify({path})});
-  loadSources();
-});
-async function addSource(body) {
-  return fetch("api/logsources", {method: "POST",
-    headers: {"Content-Type": "application/json", ...MUT},
-    body: JSON.stringify(body)}).then(r => r.json()).catch(() => ({ok:false, message:"request failed"}));
-}
-function renderScan(cands) {
-  const box = $("scanResults");
-  box.style.display = "block";
-  if (!cands.length) {
-    box.innerHTML = `<div class="empty">No new log files found — already watching everything auto-detectable. (Add anything unusual by hand.)</div>`;
-    return;
-  }
-  box._cands = cands;
-  box.innerHTML =
-    `<div class="analysis-head"><div class="subhead" style="margin:0">` +
-    `Found ${cands.length} candidate log file(s) — review and add</div>` +
-    `<div class="spacer" style="flex:1"></div><button id="addAllScan">Add all</button></div>` +
-    cands.map((c, i) => `<div class="scanrow" data-row="${i}">
-       <div class="meta"><span class="tag">${esc(c.type)}</span> <b>${esc(c.name)}</b>
-         <div class="rules">${esc(c.path)}</div>
-         <div class="samp" title="${esc(c.sample||"")}">${esc(c.sample||"")}</div></div>
-       <button data-addscan="${i}">Add</button></div>`).join("");
-}
-$("scanBtn").addEventListener("click", async () => {
-  $("scanBtn").disabled = true; $("scanBtn").textContent = "Scanning…";
-  const d = await fetch("api/logsources/scan", {method: "POST", headers: {...MUT}})
-    .then(r => r.json()).catch(() => ({candidates: []}));
-  $("scanBtn").disabled = false; $("scanBtn").textContent = "Scan for logs";
-  renderScan(d.candidates || []);
-});
-$("scanResults").addEventListener("click", async (e) => {
-  const box = $("scanResults"), cands = box._cands || [];
-  if (e.target.id === "addAllScan") {
-    e.target.disabled = true; e.target.textContent = "Adding…";
-    for (const c of cands) await addSource({name: c.name, path: c.path, type: c.type, regex: ""});
-    loadSources(); box.style.display = "none";
-    return;
-  }
-  const i = e.target.dataset && e.target.dataset.addscan;
-  if (i == null) return;
-  const c = cands[+i];
-  e.target.disabled = true; e.target.textContent = "Adding…";
-  const res = await addSource({name: c.name, path: c.path, type: c.type, regex: ""});
-  if (res.ok) {
-    e.target.textContent = "Added ✓";
-    const row = e.target.closest(".scanrow"); if (row) row.style.opacity = ".5";
-    loadSources();
-  } else {
-    e.target.disabled = false; e.target.textContent = "Add";
-    alert(res.message || "Failed to add");
-  }
-});
-
-async function loadAnalysis() {
-  try {
-    const a = await fetch("api/analysis/latest").then(r => r.json());
-    renderAnalysis(a);
-    return a;
-  } catch (e) { /* leave prior state */ return null; }
-}
-
-let analysisPoll = null;
-$("analyzeBtn").addEventListener("click", async () => {
-  $("analyzeBtn").disabled = true;
-  $("analyzeBtn").textContent = "Analyzing…";
-  await fetch("api/analysis/run", {method: "POST",
-    headers: {...MUT}});
-  const started = Date.now();
-  if (analysisPoll) clearInterval(analysisPoll);
-  analysisPoll = setInterval(async () => {
-    const a = await loadAnalysis();
-    // stop when the worker clears, or after 4 min as a safety valve
-    if ((a && !a.running) || Date.now() - started > 240000) {
-      clearInterval(analysisPoll); analysisPoll = null;
-    }
-  }, 4000);
-});
-
-$("hours").addEventListener("change", refresh);
-$("sevFilter").addEventListener("change", refresh);
-refresh();
-loadAnalysis();
-loadVulns();
-loadSources();
-setInterval(refresh, 30000);
-setInterval(loadAnalysis, 60000);
-setInterval(loadVulns, 300000);
-setInterval(loadSources, 30000);
-window.addEventListener("resize", () => refresh());
-"""
