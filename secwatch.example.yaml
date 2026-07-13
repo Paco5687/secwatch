@@ -67,6 +67,15 @@ cluster:
   url: ""                   # http://THIS-NODE:8931 — how peers reach this node (a leaf can omit it)
   # gossip_secs: 60         # how often bans/roster converge
 
+# Self-update — each node is a git checkout of the install repo, so "update" =
+# git pull the latest release + restart the service. From a peer's dashboard you
+# can push an update to the whole cluster at once (leaves pull it on their next
+# sync). Toggle checking/updating here, or from the Cluster > Software updates card.
+update:
+  auto: false               # check the origin on a schedule and update if behind
+  allow_remote: true        # accept a fleet update pushed/pulled from a cluster peer
+  # check_interval: 21600   # seconds between auto-update checks (default 6h)
+
 # How a ban is enforced (ban-actuator adapter):
 #   traefik  — write a ClientIP deny router file (needs proxy.bans_file)
 #   nftables — maintain an nft set dropped in the input chain (needs root)

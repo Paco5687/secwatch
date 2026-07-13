@@ -204,6 +204,18 @@ CLUSTER_INSTALL_REPO = _s(None, "cluster.install_repo",
                           "https://github.com/Paco5687/secwatch.git")
 CLUSTER_INSTALL_DIR = _s(None, "cluster.install_dir", "/opt/secwatch")
 
+# ---- self-update ---------------------------------------------------------
+# Nodes are git checkouts of the install repo, so "update" = git pull + restart.
+# UPDATE_AUTO: check the origin on a schedule and self-update if behind (off by
+#   default — updates should be deliberate). UPDATE_ALLOW_REMOTE: accept a fleet
+#   update pushed/polled from a peer (a leaf can only PULL its update this way,
+#   since it isn't reachable). Set it false on a box you want to pin by hand.
+UPDATE_AUTO = _bool("SECWATCH_UPDATE_AUTO", "update.auto", False)
+UPDATE_ALLOW_REMOTE = _bool("SECWATCH_UPDATE_ALLOW_REMOTE", "update.allow_remote", True)
+UPDATE_CHECK_INTERVAL = int(_s("SECWATCH_UPDATE_CHECK_INTERVAL", "update.check_interval",
+                               6 * 3600))
+UPDATE_STATE = DB_PATH.parent / "update-campaign.json"   # last fleet-update seen/applied
+
 # ---- crowd-sourced threat intel (OPT-IN, off by default) ----------------
 # Optionally share confirmed bans (attacker IP + rule + timestamp ONLY — never
 # your traffic or data) with a self-hostable aggregator, and pull its consensus
@@ -490,8 +502,11 @@ def reload_live():
         ALERT_MIN_SEVERITY, AUTOBAN, RATE_LIMIT, SCAN_4XX_LIMIT, BOT_MIN_REQS, \
         STUFF_LIMIT, SECRET_PROBE_BAN, LLM_BASE_URL, LLM_MODEL, LLM_API_KEY, \
         LLM_JSON_MODE, LLM_TEMPERATURE, LLM_MAX_TOKENS, LLM_ALERT_THREAT, \
-        CVE_SEVERITIES, CLUSTER_ROLE, CLUSTER_ENABLED, CLUSTER_URL
+        CVE_SEVERITIES, CLUSTER_ROLE, CLUSTER_ENABLED, CLUSTER_URL, \
+        UPDATE_AUTO, UPDATE_ALLOW_REMOTE
     _overrides = _settings.load_overrides()
+    UPDATE_AUTO = _bool("SECWATCH_UPDATE_AUTO", "update.auto", False)
+    UPDATE_ALLOW_REMOTE = _bool("SECWATCH_UPDATE_ALLOW_REMOTE", "update.allow_remote", True)
     CLUSTER_ROLE = _s("SECWATCH_CLUSTER_ROLE", "cluster.role", "standalone")
     CLUSTER_ENABLED = CLUSTER_ROLE in ("peer", "leaf")
     CLUSTER_URL = _s("SECWATCH_CLUSTER_URL", "cluster.url", "") or _auto_cluster_url()

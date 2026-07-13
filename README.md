@@ -159,6 +159,15 @@ peers, so a compromised edge box can't recon or poison the cluster). A leaf only
 makes *outbound* connections, so its port can stay firewalled. See the
 [Cluster wiki page](https://github.com/Paco5687/secwatch/wiki/Cluster).
 
+**Keeping the fleet current** — each node is a git checkout, so the dashboard's
+**Cluster → Software updates** card shows the running vs. latest version and
+updates a node in place (`git pull` + restart). From a **peer** you can **Update
+entire fleet** in one click: reachable peers update immediately and **leaf** nodes
+(which nothing can reach) pull the update on their next sync — so you press the
+button once and every box, including firewalled edges, converges. Set
+`update.auto: true` for hands-off updates, or `update.allow_remote: false` to pin a
+box. See the [Updates wiki page](https://github.com/Paco5687/secwatch/wiki/Updates).
+
 ## Deploying with Docker
 
 ```bash

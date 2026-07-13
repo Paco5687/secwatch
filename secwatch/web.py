@@ -16,7 +16,8 @@ from fastapi.staticfiles import StaticFiles
 
 from . import (__version__, alert, auth, auditwatch, authwatch, ban, cluster,
                config, cvewatch, db, detect, dockerwatch, fimwatch, healthwatch,
-               hostwatch, llm_analysis, logsources, parser, procwatch, tailer)
+               hostwatch, llm_analysis, logsources, parser, procwatch, tailer,
+               update)
 
 log = logging.getLogger("secwatch.web")
 
@@ -176,6 +177,24 @@ async def leaf_forward_task():
             log.error("leaf forward: %s", exc)
 
 
+async def update_task():
+    """If update.auto is on, periodically check the origin and self-update when
+    behind. Off by default — updates should be deliberate (or fleet-pushed)."""
+    if not config.UPDATE_AUTO or not update.is_git_checkout():
+        return
+    await asyncio.sleep(120)   # let the service settle after boot
+    while True:
+        try:
+            st = await asyncio.to_thread(update.status, True)
+            if st.get("behind"):
+                log.info("auto-update: behind by %d commit(s) → updating",
+                         st.get("behind_commits", 0))
+                await asyncio.to_thread(update.self_update, "auto")
+        except Exception as exc:
+            log.error("auto-update check: %s", exc)
+        await asyncio.sleep(config.UPDATE_CHECK_INTERVAL)
+
+
 async def edge_silence_task(engine):
     """Alert if the Traefik access log stops advancing — proxy down, or an
     attacker who owns Traefik disabled logging to blind the monitor."""
@@ -318,6 +337,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(crowd_task(), name="crowd"),
         asyncio.create_task(cluster_task(), name="cluster"),
         asyncio.create_task(leaf_forward_task(), name="cluster_leaf"),
+        asyncio.create_task(update_task(), name="update"),
     ]
     if config.MODE == "all":
         tasks += [
@@ -355,7 +375,8 @@ _AUTH_OPEN_PATHS = {"/healthz", "/login", "/auth/login", "/auth/logout",
 # dashboard login gate. Management endpoints are deliberately NOT here.
 _CLUSTER_HMAC_PATHS = {"/api/cluster/ping", "/api/cluster/join", "/api/cluster/roster",
                        "/api/cluster/ban", "/api/cluster/blocklist",
-                       "/api/cluster/event", "/api/cluster/query"}
+                       "/api/cluster/event", "/api/cluster/query",
+                       "/api/cluster/update", "/api/cluster/update-poll"}
 _login_fails = {}   # ip -> [fail_count, locked_until]
 
 
@@ -1079,6 +1100,28 @@ async def cluster_query(request: Request):
     return _node_stats()
 
 
+@app.post("/api/cluster/update")
+async def cluster_update_push(request: Request):
+    """A peer pushed a fleet-update campaign. Re-broadcast + apply (git pull +
+    restart) if we accept remote updates and haven't applied it yet."""
+    payload, err = await _cluster_auth(request)
+    if err:
+        return err
+    await asyncio.to_thread(cluster.receive_update_campaign,
+                            payload.get("ts"), payload.get("by", ""),
+                            payload.get("to_version", ""))
+    return {"ok": True, "node": config.CLUSTER_NAME}
+
+
+@app.post("/api/cluster/update-poll")
+async def cluster_update_poll(request: Request):
+    """Serve the current fleet-update campaign so a leaf (unreachable) can pull it."""
+    _, err = await _cluster_auth(request)
+    if err:
+        return err
+    return cluster.current_campaign()
+
+
 def _node_stats():
     conn = db.connect(readonly=True)
     try:
@@ -1229,6 +1272,47 @@ def cluster_reveal():
 def cluster_peer_remove(payload: dict = Body(...)):
     cluster.remove_peer(str(payload.get("name", "")))
     return {"ok": True}
+
+
+# ---- self-update -------------------------------------------------------------
+
+@app.get("/api/update/status")
+async def update_status(fetch: bool = Query(True)):
+    """Current vs available version for this node (contacts origin if fetch=1),
+    plus whether this node can push a fleet update and any pending campaign."""
+    st = await asyncio.to_thread(update.status, fetch)
+    st["cluster_role"] = config.CLUSTER_ROLE
+    st["can_push_fleet"] = (config.CLUSTER_ENABLED and config.CLUSTER_ROLE == "peer"
+                            and bool(cluster.queryable_peers()))
+    st["peer_count"] = len(cluster.queryable_peers())
+    st["campaign"] = cluster.current_campaign() if config.CLUSTER_ENABLED else None
+    return st
+
+
+@app.post("/api/update/self")
+async def update_self():
+    """Update THIS node now (git pull + restart)."""
+    ok, msg = await asyncio.to_thread(update.self_update, "manual")
+    return {"ok": ok, "message": msg}
+
+
+@app.post("/api/update/fleet")
+async def update_fleet():
+    """From a peer: push an update campaign to the rest of the cluster. Reachable
+    peers apply immediately; leaves apply on their next cycle (within a gossip
+    interval). This node isn't touched — use 'Update this node' for that."""
+    if not config.CLUSTER_ENABLED or config.CLUSTER_ROLE != "peer":
+        return {"ok": False, "message": "Only a cluster peer can push a fleet update."}
+    reached = await asyncio.to_thread(cluster.request_fleet_update,
+                                      config.CLUSTER_NAME, __version__)
+    leaves = [p["name"] for p in cluster.load_peers() if p.get("role") == "leaf"]
+    note = ""
+    if leaves:
+        note = (f" {len(leaves)} leaf node(s) ({', '.join(leaves)}) will pull the "
+                f"update within ~{config.CLUSTER_GOSSIP_SECS}s.")
+    return {"ok": True, "reached": reached,
+            "message": (f"Fleet update sent. Pushed to {len(reached)} peer(s)"
+                        f"{': ' + ', '.join(reached) if reached else ''}.{note}")}
 
 
 @app.get("/api/devices")

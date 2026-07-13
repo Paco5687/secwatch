@@ -670,12 +670,17 @@ VIEWS.cluster = {
          <div class="sethelp">Run the generated one-liner on a new Linux box (as root) — it installs secwatch and auto-joins this cluster. Single-use, expires shortly. The command carries the cluster secret, so treat it like a password and only run it over your trusted network.</div>
          <div id="cEnrollOut" style="margin-top:8px"></div>
        </div>
+       <div class="card" style="margin-top:12px" id="updCard"><div class="cardhead"><h2>Software updates</h2>
+         <div class="spacer"></div><button id="uCheck">Check for updates</button></div>
+         <div id="updBody"><div class="sethelp">Checking this node's version…</div></div>
+       </div>
        <div class="card" style="margin-top:12px"><div class="cardhead"><h2>Manage cluster</h2>
          <div class="spacer"></div><button id="cReveal">Show secret</button>
          <button id="cLeave" class="danger">Leave cluster</button></div>
          <div id="cSecretReveal"></div>
          ${peerRows ? `<div style="margin-top:10px">${peerRows}</div>` : `<div class="empty">No peers yet — add a device above, or share the secret to join another node.</div>`}
        </div>`;
+    wireUpdatePanel();
     $("cEnroll").addEventListener("click", async () => {
       $("cEnroll").disabled = true;
       const r = await jpost("api/cluster/enroll", {role: $("cEnrollRole").value});
@@ -703,6 +708,59 @@ VIEWS.cluster = {
     }));
   },
 };
+
+async function wireUpdatePanel() {
+  const body = $("updBody"), btn = $("uCheck");
+  async function load() {
+    btn.disabled = true; btn.textContent = "Checking…";
+    let s;
+    try { s = await jget("api/update/status"); }
+    catch (e) { body.innerHTML = `<span class="msg-err">Update check failed.</span>`; btn.disabled = false; btn.textContent = "Check for updates"; return; }
+    btn.disabled = false; btn.textContent = "Check for updates";
+    if (!s.supported) {
+      body.innerHTML = `<div class="sethelp">Version <b>${esc(s.current)}</b>. ${esc(s.reason || "Self-update unavailable on this node.")}</div>`;
+      return;
+    }
+    const behind = s.behind;
+    const lamp = behind ? "lamp-elevated" : "lamp-low";
+    const state = behind
+      ? `<b>${esc(s.latest)}</b> available — this node is <b>${s.behind_commits}</b> commit${s.behind_commits === 1 ? "" : "s"} behind.`
+      : `Up to date.`;
+    const fetchWarn = s.fetch_error ? `<div class="sethelp msg-err">Couldn't reach the origin: ${esc(s.fetch_error)}</div>` : "";
+    let fleetBtn = "";
+    if (s.cluster_role === "peer") {
+      const dis = s.peer_count ? "" : "disabled";
+      fleetBtn = `<button id="uFleet" ${dis} title="${s.peer_count ? "" : "no peers to push to"}">Update entire fleet</button>`;
+    }
+    body.innerHTML =
+      `<div class="checkrow"><span class="statuslamp ${lamp}"><i></i>${esc(s.current)}</span>
+         <span class="cmsg" style="margin-left:8px">${state}</span></div>
+       ${fetchWarn}
+       <div class="formrow" style="margin-top:10px">
+         <button id="uSelf" ${behind ? "" : "disabled"}>${behind ? "Update this node" : "This node is current"}</button>
+         ${fleetBtn}
+         <span id="uMsg" class="cmsg"></span>
+       </div>
+       <div class="sethelp">Nodes are git checkouts — “update” pulls the latest release and restarts the service. ${s.cluster_role === "peer" ? "“Update entire fleet” pushes the update to every peer and leaf; leaves apply it on their next sync." : ""}</div>`;
+    const self = $("uSelf");
+    if (self && behind) self.addEventListener("click", async () => {
+      if (!confirm("Update this node now? secwatch will pull the latest release and restart — the dashboard will blip for a few seconds.")) return;
+      self.disabled = true; $("uMsg").textContent = "Updating…";
+      const r = await jpost("api/update/self", {});
+      $("uMsg").innerHTML = r.ok ? `<span class="msg-ok">${esc(r.message)}</span>` : `<span class="msg-err">${esc(r.message)}</span>`;
+    });
+    const fleet = $("uFleet");
+    if (fleet) fleet.addEventListener("click", async () => {
+      if (!confirm("Push this update to every other node in the cluster? Each will pull the latest release and restart.")) return;
+      fleet.disabled = true; $("uMsg").textContent = "Sending…";
+      const r = await jpost("api/update/fleet", {});
+      fleet.disabled = false;
+      $("uMsg").innerHTML = r.ok ? `<span class="msg-ok">${esc(r.message)}</span>` : `<span class="msg-err">${esc(r.message)}</span>`;
+    });
+  }
+  btn.addEventListener("click", load);
+  load();
+}
 
 /* ---------- settings ---------- */
 function setControl(f) {

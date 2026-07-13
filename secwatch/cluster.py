@@ -318,6 +318,7 @@ def tick():
         _push_outbox()
         _gossip_roster()
         _pull_blocklists(conn)
+        poll_update_campaign()   # catch a fleet-update we weren't pushed (or a leaf)
     finally:
         conn.close()
 
@@ -357,6 +358,115 @@ def push_events_since(last_id):
     except Exception as exc:
         log.debug("leaf event push failed: %s", exc)
         return last_id
+
+
+# ---- fleet self-update campaign ------------------------------------------
+# A peer triggers "update the fleet": it stamps a campaign (ts + target version)
+# and pushes it to reachable peers, who apply it (git pull + restart) and re-push
+# — so it floods the mesh. A leaf isn't reachable, so it PULLs the campaign on its
+# own cycle. Each node records the last campaign it applied, so a campaign fires
+# once per node and can't loop (the restart wipes memory; the record is on disk).
+
+
+def _load_update_state():
+    try:
+        return json.loads(config.UPDATE_STATE.read_text())
+    except (OSError, ValueError):
+        return {"campaign_ts": 0, "applied_ts": 0, "by": "", "to_version": ""}
+
+
+def _save_update_state(st):
+    config.UPDATE_STATE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = config.UPDATE_STATE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(st))
+    os.replace(tmp, config.UPDATE_STATE)
+
+
+def _maybe_apply_campaign(ts, by, to_version):
+    """Record a campaign and, if it's newer than what we've applied and this node
+    accepts remote updates, self-update. Returns True if an update was started."""
+    st = _load_update_state()
+    if ts <= st.get("campaign_ts", 0) and ts <= st.get("applied_ts", 0):
+        return False
+    st["campaign_ts"] = max(ts, st.get("campaign_ts", 0))
+    st["by"], st["to_version"] = by, to_version
+    if ts <= st.get("applied_ts", 0):
+        _save_update_state(st)
+        return False
+    if not config.UPDATE_ALLOW_REMOTE:
+        _save_update_state(st)
+        log.info("cluster: ignoring fleet-update from %s (update.allow_remote=false)", by)
+        return False
+    from . import update
+    ok, msg = update.self_update(reason=f"fleet:{by}")
+    if ok:
+        st["applied_ts"] = ts    # mark applied so we don't loop after the restart
+    _save_update_state(st)
+    log.info("cluster: fleet-update from %s → %s: %s", by, to_version or "latest", msg)
+    return ok
+
+
+def request_fleet_update(by=None, to_version=None, ts=None):
+    """Initiate a fleet update: stamp a campaign and push it to reachable peers.
+    Returns the list of peer names reached."""
+    ts = int(ts or time.time())
+    by = by or config.CLUSTER_NAME
+    st = _load_update_state()
+    st["campaign_ts"] = ts
+    # the initiator doesn't self-update from its own campaign (it's the one already
+    # on the new version) — mark it applied so a later pull doesn't bounce it.
+    st["applied_ts"] = max(ts, st.get("applied_ts", 0))
+    st["by"], st["to_version"] = by, to_version or ""
+    _save_update_state(st)
+    return _push_update_campaign(ts, by, to_version or "")
+
+
+def _push_update_campaign(ts, by, to_version):
+    reached = []
+    for p in queryable_peers():
+        try:
+            peer_request(p["url"], "/api/cluster/update",
+                         {"ts": ts, "by": by, "to_version": to_version})
+            reached.append(p["name"])
+        except Exception as exc:
+            log.debug("cluster update push to %s failed: %s", p["name"], exc)
+    return reached
+
+
+def receive_update_campaign(ts, by, to_version):
+    """Handle a campaign pushed by a peer: re-broadcast to our own peers (flood the
+    mesh), then apply locally. Re-broadcast happens first so it propagates before
+    our own restart. The applied-record guard stops the flood from looping."""
+    ts = int(ts or 0)
+    if not ts:
+        return
+    st = _load_update_state()
+    if ts > st.get("campaign_ts", 0):
+        _push_update_campaign(ts, by, to_version)   # fan out to peers-of-peers
+    _maybe_apply_campaign(ts, by, to_version)
+
+
+def poll_update_campaign():
+    """Ask reachable peers for the current campaign and apply it if newer. This is
+    how a leaf (never reachable) receives fleet updates, and how a peer catches a
+    push it missed. No-op for the initiator (its applied_ts already covers it)."""
+    best_ts, best_by, best_ver = 0, "", ""
+    for p in queryable_peers():
+        try:
+            resp = peer_request(p["url"], "/api/cluster/update-poll", {})
+            if int(resp.get("ts", 0)) > best_ts:
+                best_ts = int(resp["ts"])
+                best_by, best_ver = resp.get("by", ""), resp.get("to_version", "")
+        except Exception as exc:
+            log.debug("cluster update poll from %s failed: %s", p["name"], exc)
+    if best_ts:
+        _maybe_apply_campaign(best_ts, best_by, best_ver)
+
+
+def current_campaign():
+    st = _load_update_state()
+    return {"ts": st.get("campaign_ts", 0), "by": st.get("by", ""),
+            "to_version": st.get("to_version", "")}
 
 
 # ---- CLI -----------------------------------------------------------------
