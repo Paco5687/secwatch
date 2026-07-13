@@ -11,8 +11,8 @@ import ipaddress
 from fastapi import Body, FastAPI, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
-from . import (alert, auth, authwatch, ban, config, cvewatch, db, detect,
-               dockerwatch, fimwatch, hostwatch, llm_analysis, parser,
+from . import (alert, auth, auditwatch, authwatch, ban, config, cvewatch, db,
+               detect, dockerwatch, fimwatch, hostwatch, llm_analysis, parser,
                procwatch, tailer)
 
 log = logging.getLogger("secwatch.web")
@@ -238,6 +238,7 @@ async def lifespan(app: FastAPI):
             asyncio.create_task(dockerwatch.DockerWatcher(engine, conn).run(), name="docker"),
             asyncio.create_task(fimwatch.FimWatcher(engine, conn).run(), name="fim"),
             asyncio.create_task(procwatch.ProcWatcher(engine, conn).run(), name="proc"),
+            asyncio.create_task(auditwatch.AuditWatcher(engine, conn).run(), name="audit"),
         ]
     else:
         log.info("mode=%s — host collectors expected from a separate agent",

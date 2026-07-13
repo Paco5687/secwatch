@@ -11,7 +11,8 @@ import json
 import logging
 import urllib.request
 
-from . import authwatch, config, db, detect, dockerwatch, hostwatch, procwatch
+from . import (auditwatch, authwatch, config, db, detect, dockerwatch,
+               hostwatch, procwatch)
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -58,6 +59,7 @@ async def main():
         asyncio.create_task(authwatch.AuthWatcher(engine, conn).run()),
         asyncio.create_task(hostwatch.HostWatcher(engine, conn).run()),
         asyncio.create_task(procwatch.ProcWatcher(engine, conn).run()),
+        asyncio.create_task(auditwatch.AuditWatcher(engine, conn).run()),
         asyncio.create_task(dockerwatch.DockerWatcher(engine, conn).run()),
     ]
     await asyncio.gather(*tasks)

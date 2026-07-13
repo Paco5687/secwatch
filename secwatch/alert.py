@@ -40,6 +40,7 @@ RULE_TITLE = {
     "ransomware_canary": "Canary file tampered (ransomware?)",
     "reverse_shell": "Reverse/interactive shell detected",
     "crypto_miner": "Crypto-miner process detected",
+    "dropper": "Download-and-execute dropper detected",
     "exec_suspicious": "Process running from temp dir",
     "exec_deleted": "Process running a deleted binary",
     "egress_new": "New outbound connection (egress)",

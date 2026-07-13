@@ -190,6 +190,13 @@ KEV_MAX_AGE = 24 * 3600
 
 # ---- process + egress / C2 detection (generic) --------------------------
 PROC_INTERVAL = int(os.environ.get("SECWATCH_PROC_INTERVAL", "30"))
+# Real-time exec monitoring via the Linux audit subsystem catches short-lived
+# processes the poll misses. Needs auditd + a readable audit log (root); falls
+# back to the /proc poll when unavailable. set_rule adds the execve rule if root.
+AUDIT_ENABLED = _bool("SECWATCH_AUDIT", "audit.enabled", True)
+AUDIT_LOG = _s(None, "audit.log", "/var/log/audit/audit.log")
+AUDIT_KEY = "secwatch_exec"
+AUDIT_SET_RULE = _bool(None, "audit.set_rule", True)
 
 # ---- file-integrity monitoring (site-specific dirs) ---------------------
 FIM_INTERVAL = int(os.environ.get("SECWATCH_FIM_INTERVAL", "120"))

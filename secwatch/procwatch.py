@@ -25,16 +25,25 @@ REVSHELL_RE = re.compile(
     # unambiguous network-shell signatures below are what indicate a real revshell.
     r"/dev/(?:tcp|udp)/"                              # bash /dev/tcp redirect
     r"|\bnc(?:at)?\b[^|]*\s-[a-z]*e"                  # nc -e
+    r"|\bmkfifo\b.*(?:nc|/dev/tcp|openssl\s+s_client)"   # mkfifo backpipe shell
     # python one-liner that pulls in sockets AND a shell/exec primitive (any order)
     r"|\bpython[0-9.]*\b\s+-c\b(?=.*socket)(?=.*(?:subprocess|pty|os\.dup2|/bin/(?:sh|bash)))"
     r"|\bsocat\b.*(?:exec|system)"
     r"|\bperl\b\s+-e.*(?:Socket|exec)"
-    r"|\bruby\b\s+-r?socket",
+    r"|\bruby\b\s+-r?socket"
+    r"|\bphp\b\s+-r.*(?:fsockopen|proc_open|shell_exec)"   # php reverse shell
+    r"|\bawk\b.*/inet/(?:tcp|udp)/"                   # awk /inet reverse shell
+    r"|\bopenssl\b\s+s_client.*-connect.*(?:/bin/(?:sh|bash)|\|)",
     re.I)
+# Download-and-execute droppers: piping a fetch straight into a shell/interpreter.
+DROPPER_RE = re.compile(
+    r"\b(?:curl|wget|fetch)\b[^|]*\|\s*(?:sudo\s+)?(?:ba|z|d|a)?sh\b"
+    r"|\b(?:curl|wget)\b[^|]*\|\s*(?:python[0-9.]*|perl|ruby|php)\b", re.I)
 MINER_RE = re.compile(
     r"\b(xmrig|minerd|cpuminer|kdevtmpfsi|kinsing|xmr-stak|ethminer|nbminer|"
     r"phoenixminer|t-rex|lolminer|cgminer|bfgminer|nanominer|teamredminer|"
-    r"stratum\+tcp)\b", re.I)
+    r"stratum\+tcp|randomx|monero|--donate-level|--cpu-priority|pool\."
+    r"(?:minexmr|supportxmr|nanopool|hashvault))\b", re.I)
 SUSPICIOUS_EXE_DIRS = ("/tmp/", "/dev/shm/", "/var/tmp/", "/run/user/")
 # A "(deleted)" binary under these paths is almost always a benign apt/upgrade
 # artifact (long-running process whose package was updated), not malware.
@@ -57,6 +66,10 @@ def scan_process(pid, cmdline, exe):
     if MINER_RE.search(cmdline):
         return ("crypto_miner", "high",
                 f"crypto-miner signature in pid {pid}: {cmdline[:160]}")
+    if DROPPER_RE.search(cmdline):
+        return ("dropper", "high",
+                f"download-and-execute (fetch piped to a shell) in pid {pid}: "
+                f"{cmdline[:160]}")
     if exe:
         deleted = exe.endswith(" (deleted)")
         path = exe[:-10] if deleted else exe   # strip " (deleted)"
