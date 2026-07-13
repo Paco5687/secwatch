@@ -67,10 +67,16 @@ mitigation *aid*, not a firewall or a patch manager.
 
 ```bash
 git clone https://github.com/Paco5687/secwatch && cd secwatch
-python -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt
-
-python -m secwatch.install     # pick a port, create an admin login, auto-detect config
+./install.sh     # installs prerequisites (git/python3/venv) + deps, then runs the wizard
 # follow the printed steps → open http://SERVER-IP:PORT/ and sign in
+```
+
+`install.sh` sets up everything in one go. Prefer to do it by hand? (note the
+`python3` — many distros don't ship a bare `python`):
+
+```bash
+python3 -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt
+python -m secwatch.install     # pick a port, create an admin login, auto-detect config
 ```
 
 `secwatch install` auto-detects your reverse proxy + access log, app hosts,
