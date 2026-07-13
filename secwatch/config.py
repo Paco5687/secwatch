@@ -212,6 +212,17 @@ ENDPOINT_RULES = _y("endpoint_rules", []) or []
 EVENT_SUPPRESS = 600
 ALERT_COOLDOWN = 1800
 ALERT_MIN_SEVERITY = os.environ.get("SECWATCH_ALERT_MIN_SEVERITY", "high")
+# Anti-noise: these rules still BAN + record to the dashboard, but do NOT push a
+# Discord alert on their own. They're the constant background of blocked internet
+# scanning (secret-file probes, path scans, floods, hits on privileged endpoints
+# that got 403'd) that every public host sees — alerting on each one is just
+# fatigue and buries real signals (host/EDR events, successful probes, cred
+# stuffing). An event from a PRIVATE/internal source still alerts (possible
+# lateral movement). Tune in secwatch.yaml: alerting.quiet_rules: [...].
+ALERT_QUIET_RULES = set(_list("SECWATCH_ALERT_QUIET_RULES", "alerting.quiet_rules",
+    ["secret_probe", "scan", "flood", "privileged_access"]))
+# When True, a quiet rule still alerts if the source IP is private/internal.
+ALERT_QUIET_EXCEPT_PRIVATE = _bool(None, "alerting.quiet_except_private", True)
 EVENT_RETENTION_DAYS = 14
 IP_MINUTE_RETENTION_HOURS = 48
 LOG_ROTATE_BYTES = 200 * 1024 * 1024

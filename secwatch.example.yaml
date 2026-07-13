@@ -149,6 +149,16 @@ alerting:
   # or read it from a file to keep the secret out of this config:
   discord_webhook_file: /srv/YOUR_APP/.secrets/discord-webhook.env
   discord_webhook_file_key: SECWATCH_DISCORD_WEBHOOK_URL
+  # Anti-noise: these rules still BAN + show on the dashboard, but don't push a
+  # Discord alert — they're the constant background of blocked internet scanning
+  # (probes for .env/.git/wp-config, path scans, floods, 403'd /admin hits) that
+  # every public host gets. Alerting on each just buries the events that matter
+  # (host/EDR activity, a probe that SUCCEEDED, credential stuffing). Set to []
+  # to alert on everything, or add/remove rule names to taste.
+  quiet_rules: [secret_probe, scan, flood, privileged_access]
+  # ...but a quiet rule STILL alerts if the source is a private/internal IP
+  # (something inside your network probing = worth knowing immediately).
+  quiet_except_private: true
 
 known_legitimate_endpoints:
   - host: ops.example.com

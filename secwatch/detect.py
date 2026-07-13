@@ -321,6 +321,12 @@ class Engine:
             >= config.SEVERITY_RANK[config.ALERT_MIN_SEVERITY]
             and self.alert_gate.get(key, 0) <= now
         )
+        # Routine blocked-scanner noise: keep banning + recording, but don't
+        # Discord-alert — unless it's from an internal source (possible lateral
+        # movement), which is exactly what we'd want to hear about.
+        if (alert and rule in config.ALERT_QUIET_RULES
+                and not (config.ALERT_QUIET_EXCEPT_PRIVATE and ip and is_private(ip))):
+            alert = False
         if alert:
             self.alert_gate[key] = now + config.ALERT_COOLDOWN
 

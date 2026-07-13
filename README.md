@@ -90,6 +90,24 @@ several at once), `ban.actuator` (traefik/nftables/nginx/none),
 (dashboard login), `llm.*` (optional). You can also add or scan for extra log
 sources live from the dashboard's **Log sources** card.
 
+## Alerting
+
+Point secwatch at a **Discord webhook** to get pushed high-severity alerts. Keep
+the URL in a gitignored secrets file (see `discord-webhook.env.example`), inline
+as `alerting.discord_webhook_url`, or via `SECWATCH_DISCORD_WEBHOOK_URL`:
+
+```yaml
+alerting:
+  discord_webhook_file: /path/to/.secrets/discord-webhook.env
+```
+
+secwatch **bans and records everything** it detects, but by default it does *not*
+alert on the constant background of blocked internet scanning (`.env`/`.git`
+probes, path scans, floods, 403'd `/admin` hits) — that noise buries the events
+that matter. Those still ban + show on the dashboard; tune what's quiet with
+`alerting.quiet_rules` (a probe from an internal IP still alerts). Full details in
+the [Wiki](https://github.com/Paco5687/secwatch/wiki/Alerting).
+
 ## Deploying with Docker
 
 ```bash
