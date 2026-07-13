@@ -143,12 +143,13 @@ def _ask_yn(prompt, default=True):
 
 def _start_service(unit_text):
     """Install + enable + start the systemd service. Prefers a system unit (boots
-    without login); falls back to a per-user unit. Returns (ok, 'system'|'user'|reason)."""
+    without login); falls back to a per-user unit. Returns (ok, 'system'|'user'|reason).
+
+    NOTE: privileged commands run WITHOUT capturing output so sudo can prompt for
+    a password on the terminal — capturing it hangs/hides the prompt."""
     import shutil
     import subprocess
-
-    def run(cmd, **kw):
-        return subprocess.run(cmd, capture_output=True, text=True, **kw)
+    import tempfile
 
     if not shutil.which("systemctl"):
         return False, "no systemd"
@@ -157,22 +158,33 @@ def _start_service(unit_text):
 
     if is_root or sudo:
         pfx = [] if is_root else [sudo]
-        tee = run(pfx + ["tee", "/etc/systemd/system/secwatch.service"], input=unit_text)
-        if tee.returncode != 0:
-            return False, "system"
-        run(pfx + ["systemctl", "daemon-reload"])
-        run(pfx + ["systemctl", "enable", "--now", "secwatch"])
-        act = run(pfx + ["systemctl", "is-active", "secwatch"])
+        if sudo:
+            print("  (installing the service — enter your sudo password if prompted)",
+                  file=sys.stderr)
+        tmp = tempfile.NamedTemporaryFile("w", suffix=".service", delete=False)
+        tmp.write(unit_text); tmp.close()
+        try:
+            cp = subprocess.run(pfx + ["cp", tmp.name, "/etc/systemd/system/secwatch.service"])
+            if cp.returncode != 0:
+                return False, "system"
+            subprocess.run(pfx + ["systemctl", "daemon-reload"])
+            subprocess.run(pfx + ["systemctl", "enable", "--now", "secwatch"])
+        finally:
+            os.unlink(tmp.name)
+        act = subprocess.run(pfx + ["systemctl", "is-active", "secwatch"],
+                             capture_output=True, text=True)
         return act.stdout.strip() == "active", "system"
 
     # unprivileged: user unit + linger so it survives logout / boots
     d = Path.home() / ".config" / "systemd" / "user"
     d.mkdir(parents=True, exist_ok=True)
     (d / "secwatch.service").write_text(unit_text)
-    run(["systemctl", "--user", "daemon-reload"])
-    run(["systemctl", "--user", "enable", "--now", "secwatch"])
-    run(["loginctl", "enable-linger", os.environ.get("USER", "")])
-    act = run(["systemctl", "--user", "is-active", "secwatch"])
+    subprocess.run(["systemctl", "--user", "daemon-reload"])
+    subprocess.run(["systemctl", "--user", "enable", "--now", "secwatch"])
+    subprocess.run(["loginctl", "enable-linger", os.environ.get("USER", "")],
+                   capture_output=True)
+    act = subprocess.run(["systemctl", "--user", "is-active", "secwatch"],
+                         capture_output=True, text=True)
     return act.stdout.strip() == "active", "user"
 
 
