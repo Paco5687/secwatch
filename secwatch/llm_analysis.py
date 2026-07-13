@@ -14,6 +14,7 @@ import logging
 import re
 import socket
 import time
+import urllib.error
 import urllib.request
 from collections import Counter, defaultdict
 
@@ -231,8 +232,9 @@ def build_evidence(conn, hours=None, now=None):
 # --------------------------------------------------------------------------
 
 def _call_llm(evidence):
-    """Blocking HTTP call to the OpenAI-compatible endpoint. Runs in a worker thread."""
-    body = json.dumps({
+    """Blocking HTTP call to the OpenAI-compatible endpoint (local or hosted).
+    Runs in a worker thread."""
+    payload = {
         "model": config.LLM_MODEL,
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -240,21 +242,27 @@ def _call_llm(evidence):
                 "Analyze this evidence and fill the response_schema exactly.\n\n"
                 + json.dumps(evidence, ensure_ascii=False)},
         ],
-        "temperature": 0.2,
-        "max_tokens": 2000,
-        "response_format": {"type": "json_object"},
-    }).encode()
-    headers = {"Content-Type": "application/json"}
-    if config.LLM_API_KEY:
-        headers["Authorization"] = "Bearer " + config.LLM_API_KEY
+        "temperature": config.LLM_TEMPERATURE,
+        "max_tokens": config.LLM_MAX_TOKENS,
+    }
+    if config.LLM_JSON_MODE:   # some hosted providers reject this — llm.json_mode: false
+        payload["response_format"] = {"type": "json_object"}
+    headers = {"Content-Type": "application/json", "User-Agent": "secwatch"}
+    key = config.llm_api_key()
+    if key:
+        headers["Authorization"] = "Bearer " + key
     req = urllib.request.Request(
         config.LLM_BASE_URL.rstrip("/") + "/chat/completions",
-        data=body, headers=headers,
+        data=json.dumps(payload).encode(), headers=headers,
     )
-    with urllib.request.urlopen(req, timeout=config.LLM_TIMEOUT) as resp:
-        payload = json.load(resp)
-    content = payload["choices"][0]["message"]["content"]
-    usage = payload.get("usage", {})
+    try:
+        with urllib.request.urlopen(req, timeout=config.LLM_TIMEOUT) as resp:
+            data = json.load(resp)
+    except urllib.error.HTTPError as e:   # surface the provider's actual error
+        body = e.read().decode("utf-8", "replace")[:400]
+        raise RuntimeError(f"LLM endpoint returned HTTP {e.code}: {body}") from e
+    content = data["choices"][0]["message"]["content"]
+    usage = data.get("usage", {})
     return content, usage
 
 

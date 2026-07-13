@@ -123,10 +123,30 @@ fim:
 
 llm:
   enabled: false                    # optional — needs an OpenAI-compatible endpoint
-  base_url: http://127.0.0.1:11434/v1   # e.g. local Ollama; or a vLLM / remote API
+  # Works with ANY OpenAI-compatible /chat/completions endpoint:
+  #   LOCAL runner  — Ollama / vLLM / LM Studio / llama.cpp (no api_key needed)
+  #   HOSTED API    — OpenAI, OpenRouter, Together, Groq, Azure OpenAI, … (needs api_key)
+  base_url: http://127.0.0.1:11434/v1   # local Ollama default
   model: your-model-name
-  api_key: ""                       # set for a remote API (sent as Bearer)
+  api_key: ""                       # sent as "Authorization: Bearer <key>"
+  # Prefer to keep the key out of this file? Point at a file with the key instead
+  # (raw key, or a SECWATCH_LLM_API_KEY=... line). Or set the env var.
+  api_key_file: ""                  # e.g. /srv/YOUR_APP/.secrets/llm-api-key
+  json_mode: true                   # set false if your provider 400s on response_format
+  temperature: 0.2
+  max_tokens: 2000
   alert_threat: elevated
+  #
+  # --- Example: OpenAI hosted API ---
+  # enabled: true
+  # base_url: https://api.openai.com/v1
+  # model: gpt-4o-mini
+  # api_key_file: /srv/YOUR_APP/.secrets/llm-api-key
+  #
+  # --- Example: OpenRouter (many models behind one OpenAI-compatible API) ---
+  # base_url: https://openrouter.ai/api/v1
+  # model: anthropic/claude-3.5-sonnet
+  # api_key_file: /srv/YOUR_APP/.secrets/llm-api-key
 
 cve:
   enabled: true

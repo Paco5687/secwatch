@@ -321,10 +321,41 @@ LOG_SILENCE_ALERT_SECS = int(os.environ.get("SECWATCH_LOG_SILENCE_SECS", "900"))
 # Enable via site config (llm.enabled) or SECWATCH_LLM_ANALYSIS=1, pointing at
 # ANY OpenAI-compatible endpoint (local vLLM/Ollama, or a remote API + api_key).
 LLM_ANALYSIS = _bool("SECWATCH_LLM_ANALYSIS", "llm.enabled", False)
+# Works with ANY OpenAI-compatible /chat/completions endpoint: a local runner
+# (Ollama http://127.0.0.1:11434/v1, vLLM, LM Studio, llama.cpp) OR a hosted API
+# (OpenAI https://api.openai.com/v1, OpenRouter, Together, Groq, Azure, …). For a
+# hosted API set base_url + model + an api_key (sent as a Bearer token).
 LLM_BASE_URL = _s("SECWATCH_LLM_BASE_URL", "llm.base_url", "http://127.0.0.1:11434/v1")
 LLM_MODEL = _s("SECWATCH_LLM_MODEL", "llm.model", "your-model")
 LLM_API_KEY = _s("SECWATCH_LLM_API_KEY", "llm.api_key", "")
+# Keep the API key out of the config file: point at a file whose contents are the
+# key (raw, or an env-style SECWATCH_LLM_API_KEY=... line; # comments ignored).
+LLM_API_KEY_FILE = _s(None, "llm.api_key_file", "")
+# response_format: json_object — supported by OpenAI/vLLM/Ollama, but some
+# providers reject it. Turn off if your endpoint 400s on it (the prompt still
+# asks for JSON either way).
+LLM_JSON_MODE = _bool("SECWATCH_LLM_JSON_MODE", "llm.json_mode", True)
+LLM_TEMPERATURE = float(_s(None, "llm.temperature", "0.2"))
+LLM_MAX_TOKENS = int(_s(None, "llm.max_tokens", "2000"))
 LLM_TIMEOUT = int(os.environ.get("SECWATCH_LLM_TIMEOUT", "150"))
+
+
+def llm_api_key() -> str:
+    """Resolve the API key: env/inline (LLM_API_KEY) first, else llm.api_key_file."""
+    if LLM_API_KEY:
+        return LLM_API_KEY
+    if LLM_API_KEY_FILE:
+        try:
+            for line in Path(LLM_API_KEY_FILE).read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if line.startswith("SECWATCH_LLM_API_KEY="):
+                    return line.split("=", 1)[1].strip().strip('"')
+                return line   # first non-comment line = the raw key
+        except OSError:
+            pass
+    return ""
 LLM_ANALYSIS_INTERVAL = int(os.environ.get("SECWATCH_LLM_INTERVAL", str(6 * 3600)))
 LLM_ANALYSIS_HOURS = 24
 LLM_EVIDENCE_TAIL_BYTES = 8 * 1024 * 1024
