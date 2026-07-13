@@ -1192,9 +1192,12 @@ def cluster_enroll(payload: dict = Body(...)):
     """Mint a single-use enrollment token and return the 'add device' one-liner."""
     if not config.CLUSTER_ENABLED or not cluster.secret():
         return {"ok": False, "message": "Form a cluster on this node first."}
+    if config.CLUSTER_ROLE == "leaf":
+        return {"ok": False, "message": "A leaf can't seed enrollment (other nodes "
+                "can't reach it) — do this from a peer."}
     if not config.CLUSTER_URL:
-        return {"ok": False, "message": "This node has no URL (a leaf can't seed "
-                "enrollment) — run this from a peer with cluster.url set."}
+        return {"ok": False, "message": "Couldn't determine this node's URL — set "
+                "cluster.url in secwatch.yaml."}
     role = payload.get("role") if payload.get("role") in ("peer", "leaf") else "peer"
     tok, expires = cluster.mint_enroll_token(role)
     cmd = f'curl -fsSL "{config.CLUSTER_URL.rstrip("/")}/install.sh?token={tok}" | sudo sh'

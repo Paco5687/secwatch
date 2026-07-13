@@ -177,9 +177,23 @@ INGEST_TOKEN = _s("SECWATCH_INGEST_TOKEN", "hub.ingest_token", "")
 CLUSTER_ROLE = _s("SECWATCH_CLUSTER_ROLE", "cluster.role", "standalone")
 CLUSTER_ENABLED = CLUSTER_ROLE in ("peer", "leaf")
 CLUSTER_NAME = DEVICE  # a node's cluster identity is its device name
-# The URL peers use to reach THIS node (e.g. http://10.20.0.5:8931). Required for
-# a 'peer' (it gets queried); a 'leaf' can leave it blank (it's push-only).
-CLUSTER_URL = _s("SECWATCH_CLUSTER_URL", "cluster.url", "")
+
+
+def _auto_cluster_url():
+    """Best-guess URL other nodes use to reach this one: primary IP + listen port."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+    except OSError:
+        ip = "127.0.0.1"
+    return f"http://{ip}:{LISTEN_PORT}"
+
+
+# The URL peers use to reach THIS node. Auto-detected (primary IP + port) if not
+# set — override with cluster.url / SECWATCH_CLUSTER_URL for multi-homed/NAT hosts.
+CLUSTER_URL = _s("SECWATCH_CLUSTER_URL", "cluster.url", "") or _auto_cluster_url()
 CLUSTER_STORE = DB_PATH.parent / "cluster.json"     # peer roster (managed by CLI)
 CLUSTER_SECRET_FILE = DB_PATH.parent / "cluster.secret"   # shared secret, chmod 600
 CLUSTER_MAX_CLOCK_SKEW = int(_s(None, "cluster.max_clock_skew", 120))  # HMAC replay window
@@ -473,7 +487,7 @@ def reload_live():
     _overrides = _settings.load_overrides()
     CLUSTER_ROLE = _s("SECWATCH_CLUSTER_ROLE", "cluster.role", "standalone")
     CLUSTER_ENABLED = CLUSTER_ROLE in ("peer", "leaf")
-    CLUSTER_URL = _s("SECWATCH_CLUSTER_URL", "cluster.url", "")
+    CLUSTER_URL = _s("SECWATCH_CLUSTER_URL", "cluster.url", "") or _auto_cluster_url()
     ALERT_QUIET_RULES = set(_list("SECWATCH_ALERT_QUIET_RULES", "alerting.quiet_rules",
         ["secret_probe", "scan", "flood", "privileged_access"]))
     ALERT_QUIET_EXCEPT_PRIVATE = _bool(None, "alerting.quiet_except_private", True)
