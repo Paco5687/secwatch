@@ -199,6 +199,10 @@ CLUSTER_STORE = DB_PATH.parent / "cluster.json"     # peer roster (managed by CL
 CLUSTER_SECRET_FILE = DB_PATH.parent / "cluster.secret"   # shared secret, chmod 600
 CLUSTER_MAX_CLOCK_SKEW = int(_s(None, "cluster.max_clock_skew", 120))  # HMAC replay window
 CLUSTER_GOSSIP_SECS = int(_s("SECWATCH_CLUSTER_GOSSIP", "cluster.gossip_secs", 60))
+# A leaf can't be pulled from (firewalled/push-only), so its own bans reach peers
+# only by push. Besides the immediate delta push, a leaf re-pushes its full local
+# blocklist every Nth gossip cycle (idempotent) so a missed push still converges.
+CLUSTER_LEAF_RESHARE_EVERY = int(_s(None, "cluster.leaf_reshare_every", 10))
 # Device enrollment ("Add device" one-liner → /install.sh). Tokens are single-use.
 CLUSTER_ENROLL_TTL = int(_s(None, "cluster.enroll_ttl", 3600))       # token lifetime (s)
 CLUSTER_INSTALL_REPO = _s(None, "cluster.install_repo",

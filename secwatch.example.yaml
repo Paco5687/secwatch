@@ -66,6 +66,9 @@ cluster:
   #        but isn't queryable and can't read peers (outbound-only → port can stay firewalled)
   url: ""                   # http://THIS-NODE:8931 — how peers reach this node (a leaf can omit it)
   # gossip_secs: 60         # how often bans/roster converge
+  # leaf_reshare_every: 10  # a leaf re-pushes its full blocklist every Nth cycle
+                            # (peers can't pull from a leaf, so this guarantees its
+                            #  bans converge even if a one-shot push was missed)
 
 # Self-update — each node is a git checkout of the install repo, so "update" =
 # git pull the latest release + restart the service. From a peer's dashboard you

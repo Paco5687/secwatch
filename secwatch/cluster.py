@@ -316,8 +316,29 @@ def local_blocklist(conn):
     return out
 
 
+def _reshare_local_bans(conn):
+    """Re-push this node's LOCALLY-ORIGINATED active bans to peers (idempotent).
+    A leaf can't be pulled from, so — unlike a peer, whose bans a peer also picks up
+    by pulling its blocklist — a leaf's bans reach the cluster only by push. Re-sending
+    the full local set periodically closes the gap if a one-shot delta push was missed
+    (peers skip bans they already hold). Also propagates bans that predate this boot
+    (the in-memory outbox starts empty on restart)."""
+    mine = [b for b in local_blocklist(conn) if b.get("origin") == config.CLUSTER_NAME]
+    if not mine:
+        return
+    for p in queryable_peers():
+        try:
+            peer_request(p["url"], "/api/cluster/ban", {"bans": mine})
+        except Exception as exc:
+            log.debug("leaf ban reshare to %s failed: %s", p["name"], exc)
+
+
+_tick_count = 0
+
+
 def tick():
     """One gossip cycle (runs in a worker thread, own DB connection)."""
+    global _tick_count
     from . import db
     conn = db.connect()
     try:
@@ -325,6 +346,12 @@ def tick():
         _gossip_roster()
         _pull_blocklists(conn)
         poll_update_campaign()   # catch a fleet-update we weren't pushed (or a leaf)
+        # A leaf reconciles its full blocklist on boot (tick 0) and every Nth cycle,
+        # since peers can never pull its bans back.
+        if (config.CLUSTER_ROLE == "leaf"
+                and _tick_count % max(1, config.CLUSTER_LEAF_RESHARE_EVERY) == 0):
+            _reshare_local_bans(conn)
+        _tick_count += 1
     finally:
         conn.close()
 

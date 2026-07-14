@@ -3,6 +3,18 @@
 Notable changes per release. secwatch is pre-1.0; only the latest release gets
 security fixes. Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.9.5]
+
+### Fixed
+- **A leaf's bans now reliably reach the cluster.** Peers converge bans two ways
+  (push *and* being pulled from); a **leaf** can't be pulled from, so its bans went
+  out by one-shot push only — and that push was fire-and-forget, so a transient
+  failure silently dropped the ban (worst on an internet-facing edge box, whose bans
+  matter most). A leaf now also **re-pushes its full locally-originated blocklist**
+  on boot and every Nth gossip cycle (`cluster.leaf_reshare_every`, default 10) —
+  idempotent, so peers skip what they already hold. Also propagates bans that predate
+  a restart (the in-memory outbox starts empty).
+
 ## [0.9.4]
 
 ### Fixed
