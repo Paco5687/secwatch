@@ -180,11 +180,11 @@ auth:
   username: admin
   password_hash: ""                 # pbkdf2 hash — set via `secwatch install`, never plaintext
   session_ttl: 86400
-  # Safety: if the dashboard would bind to a NON-loopback address (e.g. 0.0.0.0)
-  # with no password, secwatch REFUSES to start. To intentionally run without a
-  # login — only on a trusted LAN, or behind a proxy that authenticates — either
-  # set this true or start with SECWATCH_NO_AUTH=1. (Binding SECWATCH_HOST=127.0.0.1
-  # is exempt: loopback isn't network-reachable.)
+  # Safety: if the dashboard would bind to a network address with no password,
+  # secwatch protects a PUBLIC interface by falling back to loopback (127.0.0.1),
+  # and only WARNS on a private LAN (10.x/192.168.x/172.16.x) — it never refuses to
+  # run. To run open without a login on a trusted LAN (or behind an authenticating
+  # proxy) and silence the warning, set this true or start with SECWATCH_NO_AUTH=1.
   allow_insecure: false
   # Requests from these sources skip auth (a fronting proxy already authed them);
   # localhost is trusted by default so a co-located reverse proxy keeps working.

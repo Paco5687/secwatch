@@ -3,6 +3,18 @@
 Notable changes per release. secwatch is pre-1.0; only the latest release gets
 security fixes. Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.9.4]
+
+### Fixed
+- **The fail-closed guard no longer crash-loops a homelab node.** In 0.9.1–0.9.3 a
+  node bound to `0.0.0.0` with no dashboard password (a legitimate trusted-LAN setup)
+  would *refuse to start* after updating — turning a running monitor into a boot
+  loop. The guard is now network-aware: it force-protects only a **public** interface
+  (falls back to `127.0.0.1`, stays up, not exposed) and merely **warns** on a
+  private LAN (`10.x`/`192.168.x`/`172.16.x`). It never exits. Set a password or
+  `SECWATCH_NO_AUTH=1` to silence the warning. If your cluster nodes were stuck
+  restarting, updating to this release brings them back automatically.
+
 ## [0.9.3]
 
 ### Added

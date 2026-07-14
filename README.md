@@ -82,11 +82,12 @@ Customize with env vars: `SECWATCH_PORT`, `SECWATCH_ADMIN_PASSWORD`,
 `SECWATCH_NO_AUTH=1` (open dashboard on a trusted LAN), `SECWATCH_NO_START=1`,
 `SECWATCH_NO_UV=1` (skip uv, use the system Python).
 
-> **Fails closed:** secwatch will **refuse to start** if it would serve the
-> dashboard on a network interface (e.g. `0.0.0.0`) with no password set — so a
-> hand-run install can't accidentally expose an unauthenticated dashboard. Set a
-> password (the installer does), bind `SECWATCH_HOST=127.0.0.1`, or opt in
-> explicitly with `SECWATCH_NO_AUTH=1` for a trusted LAN / proxy-authenticated setup.
+> **Won't expose an open dashboard by accident:** if secwatch would serve the
+> dashboard on a network interface with no password, it protects a **public**
+> interface by falling back to `127.0.0.1` (stays up, just not exposed) and only
+> **warns** on a **private LAN** (`10.x`/`192.168.x`/`172.16.x`) — it never
+> crash-loops. Set a password (the installer does) or `SECWATCH_NO_AUTH=1` to run
+> open on a trusted LAN and silence the warning.
 
 Prefer to review the code first? Clone and run the same installer:
 

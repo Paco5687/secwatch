@@ -6,6 +6,7 @@ built-in default. Host/site-specifics (endpoint rules, trusted nets, app hosts,
 FIM dirs, proxy paths, integrations) live in `secwatch.yaml` — NOT in this file —
 so the code is portable and shareable. See `secwatch.example.yaml`.
 """
+import ipaddress
 import json
 import os
 import socket
@@ -390,22 +391,49 @@ AUTH_INSECURE_OK = _bool("SECWATCH_NO_AUTH", "auth.allow_insecure", False)
 _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "::ffff:127.0.0.1", ""}
 
 
+def _primary_ip():
+    """Best-effort primary (default-route) IP of this host. "" if undeterminable."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))   # no packets sent; just picks the route's source
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except OSError:
+        return ""
+
+
+def bind_is_public():
+    """Would the current bind expose the dashboard to a PUBLIC (non-RFC1918)
+    network? A wildcard bind is judged by the host's primary IP. Unknown → treat as
+    public (safer). Loopback is never public."""
+    host = LISTEN_HOST
+    if host in _LOOPBACK_HOSTS:
+        return False
+    ip = _primary_ip() if host in ("0.0.0.0", "::", "*") else host
+    if not ip:
+        return True
+    try:
+        return not ipaddress.ip_address(ip).is_private   # is_private covers RFC1918/loopback/link-local/ULA
+    except ValueError:
+        return True
+
+
 def insecure_exposure_reason():
-    """If we're about to serve the dashboard on a NON-loopback interface with no
-    working login and no explicit opt-out, return an actionable message (so the
-    caller can fail closed). Otherwise return None."""
+    """If the dashboard would be served on a NON-loopback interface with no working
+    login and no explicit opt-out, return an actionable message; else None. This is
+    a concern at any exposure; how hard the caller reacts depends on bind_is_public()
+    (a public interface is force-protected; a private LAN only gets a warning)."""
     exposed = LISTEN_HOST not in _LOOPBACK_HOSTS
     protected = bool(AUTH_ENABLED and AUTH_PASSWORD_HASH)
     if not exposed or protected or AUTH_INSECURE_OK:
         return None
     return (
-        f"REFUSING TO START: secwatch would serve its dashboard on "
-        f"{LISTEN_HOST}:{LISTEN_PORT} — a network-reachable interface — with NO login "
-        f"configured. Anyone who can reach this host could view (and control) it.\n"
-        f"  Fix ONE of:\n"
+        f"secwatch is serving its dashboard on {LISTEN_HOST}:{LISTEN_PORT} — a "
+        f"network-reachable interface — with NO login configured. Fix ONE of:\n"
         f"   • set a password:   re-run ./install.sh, or set auth.enabled: true + "
         f"auth.password_hash in secwatch.yaml\n"
-        f"   • bind to localhost: SECWATCH_HOST=127.0.0.1 (then reach it via SSH tunnel "
+        f"   • bind to localhost: SECWATCH_HOST=127.0.0.1 (reach it via SSH tunnel "
         f"or an authenticating proxy)\n"
         f"   • run open on purpose (trusted LAN / proxy does auth): set "
         f"SECWATCH_NO_AUTH=1  or  auth.allow_insecure: true")
