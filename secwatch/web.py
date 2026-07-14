@@ -1159,11 +1159,12 @@ async def cluster_overview():
             r = await asyncio.to_thread(cluster.peer_request, p["url"], "/api/cluster/query", {})
             return dict(r, self=False, online=True,
                         version=r.get("version") or r.get("node", {}).get("version"))
-        except Exception:
+        except Exception as e:
             return {"node": {"name": p["name"], "role": p.get("role", "peer"),
                              "url": p.get("url", "")}, "online": False, "self": False,
                     "events_24h": 0, "high_24h": 0, "bans": 0,
-                    "version": p.get("version")}   # last known, from roster
+                    "version": p.get("version"),   # last known, from roster
+                    "error": str(e)[:140]}         # why we couldn't reach it
     nodes += await asyncio.gather(*[_q(p) for p in peers])
     # leaves aren't queryable — list them from the roster so they're visible
     seen = {n["node"]["name"] for n in nodes}

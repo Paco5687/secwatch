@@ -165,6 +165,13 @@ peers, so a compromised edge box can't recon or poison the cluster). A leaf only
 makes *outbound* connections, so its port can stay firewalled. See the
 [Cluster wiki page](https://github.com/Paco5687/secwatch/wiki/Cluster).
 
+> **Networking:** **peers** must be able to reach each other on the dashboard port
+> (default `8931`) — that's how they gossip bans and show the fleet view. If a host
+> firewall blocks it, peers appear in the roster but show **unreachable** in the
+> dashboard (with fix hints). Open the port **to your cluster's subnet only**, e.g.
+> `sudo ufw allow from 10.0.0.0/24 to any port 8931 proto tcp` — not to the whole
+> internet. A **leaf** needs no inbound rule at all (it only connects out).
+
 **Keeping the fleet current** — each node is a git checkout, so the dashboard's
 **Cluster → Software updates** card shows the running vs. latest version and
 updates a node in place (`git pull` + restart). From a **peer** you can **Update

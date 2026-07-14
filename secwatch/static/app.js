@@ -571,6 +571,40 @@ VIEWS.system = {
 };
 
 /* ---------- cluster ---------- */
+function unreachableBanner(nodes) {
+  // only real peers that we tried to reach and couldn't (leaves are online:null by design)
+  const down = nodes.filter(n => n.online === false);
+  if (!down.length) return "";
+  const rows = down.map(n => {
+    const url = (n.node && n.node.url) || "";
+    const refused = /refused/i.test(n.error || "");
+    const why = refused ? "connection refused (firewall, or secwatch not listening)"
+      : /timed out/i.test(n.error || "") ? "timed out (packets dropped — firewall or host down)"
+      : (n.error || "unreachable");
+    return `<div class="checkrow"><span class="cname">${esc((n.node && n.node.name) || "?")}</span>
+      <span class="cmsg">${esc(url || "no url")} — ${esc(why)}</span></div>`;
+  }).join("");
+  const subnet = (() => {
+    const u = down.map(n => (n.node && n.node.url) || "").find(Boolean) || "";
+    const m = u.match(/\/\/(\d+\.\d+\.\d+)\.\d+/);
+    return m ? m[1] + ".0/24" : "10.0.0.0/24";
+  })();
+  return `<div class="card" style="border-left:4px solid var(--warn,#b8860b);margin-top:12px">
+    <div class="cardhead"><h2>⚠ ${down.length} peer${down.length > 1 ? "s" : ""} in the roster can't be reached</h2></div>
+    <div class="sethelp">These nodes are members but this node can't open <span class="mono">:8931</span> to them, so their
+      live stats and ban gossip won't flow. The roster still lists them; updates you push may still queue.</div>
+    <div style="margin:8px 0">${rows}</div>
+    <div class="sethelp"><b>On each unreachable node, check in order:</b>
+      <ol style="margin:6px 0 0 18px;line-height:1.6">
+        <li>Is secwatch running &amp; listening on all interfaces?<br>
+          <span class="mono">systemctl is-active secwatch &amp;&amp; sudo ss -ltn 'sport = :8931'</span><br>
+          If it shows <span class="mono">127.0.0.1:8931</span>, bind the LAN instead:
+          <span class="mono">Environment=SECWATCH_HOST=0.0.0.0</span> in its unit, then restart.</li>
+        <li>Is a host firewall blocking it? Allow the port <b>from the cluster subnet only</b>:<br>
+          <span class="mono">sudo ufw allow from ${esc(subnet)} to any port 8931 proto tcp</span></li>
+        <li>A <span class="tag">leaf</span> is push-only and never needs to be reachable — it's fine for it to stay firewalled.</li>
+      </ol></div></div>`;
+}
 function verKey(v) { const p = (v || "0").split("."); return (parseInt(p[0]) || 0) * 1e6 + (parseInt(p[1]) || 0) * 1e3 + (parseInt(p[2]) || 0); }
 function nodeCards(nodes, latest) {
   const dot = n => n.online === false ? `<span class="dot off"></span>`
@@ -586,8 +620,10 @@ function nodeCards(nodes, latest) {
       : `<span class="tag" title="version unknown">v?</span>`;
     return `<div class="card catcard" style="cursor:default">
       <div class="catname">${dot(n)}${esc(node.name || "?")} ${n.self ? `<span class="tag">this node</span>` : ""}${node.role === "leaf" ? `<span class="tag">leaf</span>` : ""}${verTag}</div>
-      <div class="catstate ${n.high_24h ? "st-alert" : "st-secure"}">${status.toUpperCase()}</div>
-      <div class="catsub">${n.events_24h || 0} events · ${n.high_24h || 0} high · ${n.bans || 0} bans (24h)</div>
+      <div class="catstate ${n.online === false ? "st-alert" : n.high_24h ? "st-alert" : "st-secure"}">${status.toUpperCase()}</div>
+      <div class="catsub">${n.online === false
+        ? "unreachable — " + esc(/refused/i.test(n.error || "") ? "connection refused" : /timed out/i.test(n.error || "") ? "timed out" : "see warning above")
+        : `${n.events_24h || 0} events · ${n.high_24h || 0} high · ${n.bans || 0} bans (24h)`}</div>
     </div>`;
   }).join("");
 }
@@ -668,6 +704,7 @@ VIEWS.cluster = {
          <div class="quick"><span><b>${nodes.filter(n => n.online !== false).length}</b>reachable</span>
            <span><b>${totHigh}</b>high (24h)</span><span><b>${totBans}</b>bans</span></div>
        </div>
+       ${unreachableBanner(nodes)}
        <div class="catgrid">${nodeCards(nodes, d.latest_version)}</div>
        <div class="card" style="margin-top:12px"><div class="cardhead"><h2>Add a device</h2>
          <div class="spacer"></div>

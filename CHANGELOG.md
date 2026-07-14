@@ -3,6 +3,22 @@
 Notable changes per release. secwatch is pre-1.0; only the latest release gets
 security fixes. Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.9.3]
+
+### Added
+- **Unreachable-peer detection.** When a cluster peer is in the roster but this node
+  can't reach its `:8931`, the Cluster view now shows a **warning banner** (and marks
+  the node card "unreachable — connection refused / timed out") with step-by-step fix
+  instructions: check the service is listening on a LAN address, and open the port to
+  the cluster subnet with a ready-to-paste `ufw` rule. Previously such peers silently
+  showed "offline" with no explanation. The overview also reports *why* (the
+  connection error) per node.
+
+### Docs
+- README + Cluster wiki: a **Networking** section — peers must reach each other on
+  `:8931`, open it to the cluster subnet only (not the internet), leaves need no
+  inbound rule — plus an "unreachable peer" troubleshooting walkthrough.
+
 ## [0.9.2]
 
 ### Added
