@@ -14,10 +14,10 @@ from fastapi import Body, FastAPI, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import (__version__, alert, auth, auditwatch, authwatch, ban, cluster,
+from . import (__version__, auth, auditwatch, authwatch, ban, cluster,
                config, cvewatch, db, detect, dockerwatch, fimwatch, healthwatch,
-               hostwatch, llm_analysis, logsources, parser, procwatch, tailer,
-               update)
+               hostwatch, llm_analysis, logsources, metrics, notifiers, parser,
+               procwatch, tailer, update)
 
 log = logging.getLogger("secwatch.web")
 
@@ -50,7 +50,7 @@ async def run_analysis_bg(reason="manual"):
             log.info("analysis (%s): threat=%s", reason, out["threat_level"])
             if (config.THREAT_RANK.get(out["threat_level"], 1)
                     >= config.THREAT_RANK.get(config.LLM_ALERT_THREAT, 2)):
-                await asyncio.to_thread(alert.send_analysis_alert, out)
+                await asyncio.to_thread(notifiers.dispatch_analysis, out)
         except Exception as exc:  # endpoint down/busy, bad response, etc.
             analysis_state["last_error"] = str(exc)[:300]
             log.error("analysis (%s) failed: %s", reason, exc)
@@ -269,7 +269,7 @@ def _queue_alert(event):
 async def alert_task():
     while True:
         event = await alert_queue.get()
-        await asyncio.to_thread(alert.send_discord, event)
+        await asyncio.to_thread(notifiers.dispatch, event)
 
 
 async def maintenance_task():
@@ -370,7 +370,8 @@ app = FastAPI(title="secwatch", lifespan=lifespan)
 
 # ---- standalone auth (only active when config.AUTH_ENABLED) --------------
 _AUTH_OPEN_PATHS = {"/healthz", "/login", "/auth/login", "/auth/logout",
-                    "/favicon.ico", "/install.sh"}  # install.sh is enrollment-token-gated
+                    "/favicon.ico", "/install.sh",  # install.sh is enrollment-token-gated
+                    "/metrics"}  # /metrics does its own gating (token / loopback / open-LAN)
 # Inter-node cluster RPCs — self-authenticate via HMAC, so they bypass the
 # dashboard login gate. Management endpoints are deliberately NOT here.
 _CLUSTER_HMAC_PATHS = {"/api/cluster/ping", "/api/cluster/join", "/api/cluster/roster",
@@ -605,9 +606,34 @@ def unban_ip(payload: dict = Body(...)):
     ip = str(payload.get("ip", "")).strip()
     conn = db.connect()
     try:
-        return {"ok": ban.remove(conn, ip)}
+        ok = ban.remove(conn, ip)
+        result = {"ok": ok}
+        if payload.get("allowlist"):   # unban AND never-ban it again
+            from . import allowlist
+            aok, amsg = allowlist.add(ip)
+            result["allowlisted"] = aok
+            result["message"] = f"unbanned + allowlisted ({amsg})" if aok else amsg
+        return result
     finally:
         conn.close()
+
+
+@app.get("/api/allowlist")
+def get_allowlist():
+    from . import allowlist
+    return {"entries": allowlist.load()}
+
+
+@app.post("/api/allowlist")
+def edit_allowlist(payload: dict = Body(...)):
+    """Add or remove an allowlist entry. {entry, action: add|remove}."""
+    from . import allowlist
+    entry = str(payload.get("entry", "")).strip()
+    if payload.get("action") == "remove":
+        allowlist.remove(entry)
+        return {"ok": True, "entries": allowlist.load()}
+    ok, msg = allowlist.add(entry)
+    return {"ok": ok, "message": msg, "entries": allowlist.load()}
 
 
 @app.get("/api/logsources")
@@ -975,9 +1001,17 @@ async def ipinfo(ip: str = Query(..., min_length=3, max_length=64)):
                 (ip, now)).fetchone()
             last = max([m["minute"] * 60 for m in mins[-1:]] +
                        [e["ts"] for e in evs[:1]] + [0])
+            from . import allowlist
+            ban_row = dict(brow) if brow else None
+            ban_source = None
+            if ban_row:
+                bb = ban_row.get("banned_by", "") or "auto"
+                ban_source = ("this node" if bb in ("auto", "manual")
+                              else "cluster peer " + bb[len("cluster:"):] if bb.startswith("cluster:")
+                              else "community blocklist" if bb == "community" else bb)
             return {"ip": ip, "hours": 24, "requests": req, "s4xx": err,
-                    "series": series, "events": evs,
-                    "ban": dict(brow) if brow else None,
+                    "series": series, "events": evs, "ban": ban_row,
+                    "ban_source": ban_source, "allowlisted": allowlist.matches(ip),
                     "trusted": detect.is_trusted(ip), "last_seen": last}
         finally:
             conn.close()
@@ -1309,6 +1343,51 @@ async def update_self():
     """Update THIS node now (git pull + restart)."""
     ok, msg = await asyncio.to_thread(update.self_update, "manual")
     return {"ok": ok, "message": msg}
+
+
+def _metrics_authorized(request: Request) -> bool:
+    """Allow a scrape if: a valid bearer token, OR the request is from loopback, OR
+    the dashboard runs open (no auth) on a trusted LAN anyway."""
+    if config.METRICS_TOKEN:
+        if request.headers.get("authorization", "") == f"Bearer {config.METRICS_TOKEN}":
+            return True
+    host = request.client.host if request.client else ""
+    if host in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
+        return True
+    return not config.AUTH_ENABLED
+
+
+@app.get("/metrics")
+async def metrics_endpoint(request: Request):
+    """Prometheus scrape endpoint (see config.metrics.*)."""
+    if not config.METRICS_ENABLED:
+        return Response("# metrics disabled\n", status_code=404, media_type="text/plain")
+    if not _metrics_authorized(request):
+        return Response("# unauthorized (set metrics.token and scrape with a Bearer "
+                        "header, or scrape from loopback)\n", status_code=401,
+                        media_type="text/plain")
+    conn = db.connect(readonly=True)
+    try:
+        body = metrics.render(conn)
+    finally:
+        conn.close()
+    return Response(body, media_type="text/plain; version=0.0.4; charset=utf-8")
+
+
+@app.post("/api/alert/test")
+async def alert_test(payload: dict = Body(default=None)):
+    """Send a test alert. With {target:{...}} test that one; otherwise test every
+    currently-configured target. Powers the Settings 'Send test alert' button."""
+    tgt = (payload or {}).get("target")
+    if tgt:
+        ok, msg = await asyncio.to_thread(notifiers.test_target, tgt)
+        return {"ok": ok, "results": [{"type": tgt.get("type"), "ok": ok, "msg": msg}]}
+    results = []
+    for t in notifiers._targets():
+        ok, msg = await asyncio.to_thread(notifiers.test_target, t)
+        results.append({"type": t.get("type", "?"), "ok": ok, "msg": msg})
+    return {"ok": bool(results) and all(r["ok"] for r in results), "results": results,
+            "message": "" if results else "no alert targets configured"}
 
 
 @app.post("/api/update/fleet")

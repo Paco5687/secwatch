@@ -14,7 +14,7 @@ import shutil
 import time
 import urllib.request
 
-from . import __version__, config, db
+from . import __version__, config
 
 log = logging.getLogger("secwatch.health")
 

@@ -74,9 +74,21 @@ cluster:
 # git pull the latest release + restart the service. From a peer's dashboard you
 # can push an update to the whole cluster at once (leaves pull it on their next
 # sync). Toggle checking/updating here, or from the Cluster > Software updates card.
+# Prometheus metrics — GET /metrics exposes a scrape snapshot (events, bans, CVEs,
+# cluster). Import deploy/grafana-dashboard.json for a ready dashboard.
+metrics:
+  enabled: true
+  token: ""                 # optional Bearer token for remote scrapers; loopback +
+                            # open-LAN dashboards don't need it (see deploy/prometheus-scrape.example.yml)
+
 update:
   auto: false               # check the origin on a schedule and update if behind
   allow_remote: true        # accept a fleet update pushed/pulled from a cluster peer
+  channel: stable           # 'stable' = follow the latest signed release TAG (recommended);
+                            # 'main' = bleeding-edge branch tip. stable falls back to main
+                            # until the repo has release tags.
+  verify_signature: false   # refuse an update whose release tag isn't signed by a trusted
+                            # key (first import the maintainer's public key into git/gpg)
   # check_interval: 21600   # seconds between auto-update checks (default 6h)
 
 # How a ban is enforced (ban-actuator adapter):
@@ -200,6 +212,14 @@ alerting:
   # or read it from a file to keep the secret out of this config:
   discord_webhook_file: /srv/YOUR_APP/.secrets/discord-webhook.env
   discord_webhook_file_key: SECWATCH_DISCORD_WEBHOOK_URL
+  # Send to any number of targets — Discord above stays supported as-is. Test them
+  # all from Settings → Alerts → "Send test alert".
+  # targets:
+  #   - {type: ntfy,     url: https://ntfy.sh, topic: my-secwatch, token: tk_optional}
+  #   - {type: gotify,   url: https://gotify.lan, token: AbCdEf}
+  #   - {type: telegram, bot_token: "123:ABC", chat_id: "456789"}
+  #   - {type: webhook,  url: https://my-endpoint.lan/hook}   # receives the raw event JSON
+  #   - {type: discord,  url: "<your Discord webhook URL>"}  # extra webhook(s)
   # Anti-noise: these rules still BAN + show on the dashboard, but don't push a
   # Discord alert — they're the constant background of blocked internet scanning
   # (probes for .env/.git/wp-config, path scans, floods, 403'd /admin hits) that

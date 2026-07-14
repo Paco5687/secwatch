@@ -12,7 +12,7 @@ import os
 import time
 from pathlib import Path
 
-from . import config, db
+from . import config
 
 log = logging.getLogger("secwatch.host")
 

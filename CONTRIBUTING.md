@@ -46,9 +46,10 @@ file rather than a live one.
 3. **Match the surrounding style.** secwatch favours small, readable modules with
    explanatory docstrings over cleverness. No formatter is enforced; read like the
    neighbours.
-4. **Test what you touch.** There's no heavy framework — a short `python -` snippet
-   or script that exercises the new path (and proves the failure mode) is enough.
-   Describe how you verified it in the PR.
+4. **Test what you touch.** There's a `pytest` suite in `tests/` (install
+   `requirements-dev.txt`, then `pytest`). Add a test for the behaviour you change —
+   especially anything security-relevant (the exposure guard, cluster auth, bans).
+   Lint with `ruff check secwatch/ tests/`. CI runs both on every push and PR.
 5. **Don't commit secrets or host-specifics.** No real IPs, hostnames, tokens,
    webhooks, or password hashes — the public repo is scrubbed on release, but keep
    your commits clean too.

@@ -8,7 +8,6 @@ runs the same signatures as procwatch — so short-lived processes are caught wi
 full detail. If the audit log isn't available (no auditd, or non-root), it stays
 dormant and the /proc poll remains the fallback.
 """
-import asyncio
 import logging
 import os
 import re

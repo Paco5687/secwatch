@@ -6,6 +6,11 @@
   traffic analysis — one lightweight tool, one config file, one command to install.
 </p>
 
+<p align="center">
+  <a href="https://github.com/Paco5687/secwatch/actions/workflows/ci.yml"><img src="https://github.com/Paco5687/secwatch/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT"></a>
+</p>
+
 ---
 
 secwatch watches your reverse proxy's access log **and your internal apps' logs**,
@@ -58,11 +63,15 @@ mitigation *aid*, not a firewall or a patch manager.
   flags the ones on the CISA KEV list (actively exploited in the wild).
 - **Watchdogs** — alerts if the access log goes silent or the proxy's route config
   changes unexpectedly.
+- **Prometheus metrics** — `GET /metrics` exposes events, bans, CVE findings, and
+  cluster state for scraping; ship-ready **Grafana dashboard** in `deploy/`. Gated by
+  loopback / a bearer token so it's never open on a public interface.
 - **Optional LLM analysis** — point it at any OpenAI-compatible endpoint (local
   Ollama/vLLM or a remote API) for a plain-language traffic assessment. Off by
   default.
 - **Self-contained dashboard** with a built-in login for direct `IP:PORT` use, and
-  Discord alerting.
+  alerting to Discord, **ntfy, Gotify, Telegram, or a generic webhook** (any number
+  of targets; test them from Settings).
 
 ## Quick start
 
@@ -102,6 +111,21 @@ endpoint, writes a reviewable `secwatch.yaml`, and can generate a systemd unit.
 
 Configuring by hand? `cp secwatch.example.yaml secwatch.yaml`, edit it (or run
 `python -m secwatch.init` to draft one from your host), then `python -m secwatch.main`.
+
+### See it first (demo mode)
+
+Want to look before you point it at real logs? Demo mode seeds a throwaway DB with
+realistic synthetic activity (probes, brute force, a webshell, bans from several
+sources, a KEV CVE) and serves the dashboard — no config, no real data:
+
+```bash
+git clone https://github.com/Paco5687/secwatch && cd secwatch
+pip install -r requirements.txt
+python -m secwatch.demo        # → http://127.0.0.1:8931/
+```
+
+It binds loopback with auth off and uses a separate `demo.db`, so it never touches a
+real deployment.
 
 ## Configuration
 
@@ -184,9 +208,29 @@ box. See the [Updates wiki page](https://github.com/Paco5687/secwatch/wiki/Updat
 
 ## Deploying with Docker
 
+Pull the published multi-arch image (built for amd64 + arm64 on each release):
+
+```bash
+docker run -d --name secwatch -p 8931:8931 -v secwatch-data:/app/data \
+  ghcr.io/paco5687/secwatch:latest
+```
+
+…or build from source with compose:
+
 ```bash
 docker compose up -d      # see docker-compose.yml for mounts + the mode options
 ```
+
+## Proxmox LXC (one-liner)
+
+Run on the **PVE host** to create a Debian container and install secwatch in it
+(review the script first — it makes a container and runs the installer inside):
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/Paco5687/secwatch/main/deploy/proxmox-lxc.sh)"
+```
+
+Override defaults via env, e.g. `CTID=141 RAM=1024 DISK=6 BRIDGE=vmbr1 bash proxmox-lxc.sh`.
 
 `SECWATCH_MODE` = `all` (one privileged container), `core` (isolated web core), or
 `agent` (host collectors only, forwarding to a core). The **core + agent** split

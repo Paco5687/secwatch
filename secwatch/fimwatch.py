@@ -11,12 +11,10 @@ State lives in the fim_baseline table (separate from host_baseline so hostwatch
 doesn't try to diff it). First run populates silently.
 """
 import asyncio
-import glob
 import hashlib
 import logging
 import os
 import time
-from pathlib import Path
 
 from . import config
 

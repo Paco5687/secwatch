@@ -7,7 +7,6 @@ and the global connection table — plus best-effort /proc/<pid>/exe. Detects:
   - new external egress destinations (C2 / exfil awareness) vs a learned baseline
 """
 import asyncio
-import glob
 import ipaddress
 import logging
 import os
@@ -16,7 +15,7 @@ import socket
 import struct
 import time
 
-from . import config, db, detect
+from . import config, db
 
 log = logging.getLogger("secwatch.proc")
 

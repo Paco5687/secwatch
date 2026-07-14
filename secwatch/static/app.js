@@ -131,9 +131,11 @@ async function openDossier(ip) {
   try { info = await jget(`api/ipinfo?ip=${encodeURIComponent(ip)}`); }
   catch (e) { d.innerHTML += `<div class="empty">lookup failed</div>`; return; }
   const b = info.ban;
-  const banBtn = b
-    ? `<button class="danger" data-act="unban">Unban</button>`
-    : `<button class="danger" data-act="ban">Ban 24h</button>`;
+  let banBtn = "";
+  if (b) banBtn = `<button class="danger" data-act="unban">Unban</button><button data-act="unban_allow" title="unban and never ban this IP again">Unban + allowlist</button>`;
+  else if (!info.trusted && !info.allowlisted) banBtn = `<button class="danger" data-act="ban">Ban 24h</button>`;
+  if (info.allowlisted) banBtn += `<button data-act="unallow">Remove from allowlist</button>`;
+  else if (!info.trusted && !b) banBtn += `<button data-act="allow" title="never ban this IP">Allowlist</button>`;
   const evs = (info.events || []).map(e =>
     `<div class="devent sev-${esc(e.severity)}">
        <div class="when">${fmtT(e.ts)} · ${esc(e.rule)}${e.count > 1 ? " ×" + e.count : ""}</div>
@@ -142,11 +144,12 @@ async function openDossier(ip) {
   d.innerHTML =
     `<div class="dhead"><span class="dip">${esc(ip)}</span>` +
     (info.trusted ? `<span class="tag">trusted</span>` : "") +
+    (info.allowlisted ? `<span class="tag">allowlisted</span>` : "") +
     (b ? `<span class="tag" style="background:var(--crit);color:var(--chip-ink)">banned</span>` : "") +
     `<div class="spacer" style="flex:1"></div>${info.trusted ? "" : banBtn}` +
     `<button data-act="close">✕</button></div>` +
     `<div class="drdns">${esc(info.rdns || "no reverse DNS")}</div>` +
-    (b ? `<div class="drdns">ban: ${esc(b.rule)} · by ${esc(b.banned_by)} · until ${fmtT(b.expires)}</div>` : "") +
+    (b ? `<div class="drdns">why: <b>${esc(b.reason || b.rule)}</b> · source: ${esc(info.ban_source || b.banned_by)} · until ${fmtT(b.expires)}</div>` : "") +
     `<div class="dstats">
        <span><b>${fmtN(info.requests)}</b>requests ${info.hours}h</span>
        <span><b>${fmtN(info.s4xx)}</b>4xx</span>
@@ -161,6 +164,9 @@ async function openDossier(ip) {
     if (act === "close") return closeDossier();
     if (act === "ban") { await jpost("api/ban", {ip}); openDossier(ip); }
     if (act === "unban") { await jpost("api/unban", {ip}); openDossier(ip); }
+    if (act === "unban_allow") { await jpost("api/unban", {ip, allowlist: true}); openDossier(ip); }
+    if (act === "allow") { await jpost("api/allowlist", {entry: ip, action: "add"}); openDossier(ip); }
+    if (act === "unallow") { await jpost("api/allowlist", {entry: ip, action: "remove"}); openDossier(ip); }
   }));
 }
 function closeDossier() { $("dossier").classList.remove("open"); $("overlay").classList.remove("open"); }
@@ -784,9 +790,10 @@ async function wireUpdatePanel() {
     }
     const behind = s.behind;
     const lamp = behind ? "lamp-elevated" : "lamp-low";
-    const state = behind
+    const chan = s.channel ? ` <span class="tag" title="update channel">${esc(s.channel.split(" ")[0])}</span>` : "";
+    const state = (behind
       ? `<b>${esc(s.latest)}</b> available — this node is <b>${s.behind_commits}</b> commit${s.behind_commits === 1 ? "" : "s"} behind.`
-      : `Up to date.`;
+      : `Up to date.`) + chan;
     const fetchWarn = s.fetch_error ? `<div class="sethelp msg-err">Couldn't reach the origin: ${esc(s.fetch_error)}</div>` : "";
     let fleetBtn = "";
     if (s.cluster_role === "peer") {
@@ -866,6 +873,13 @@ VIEWS.settings = {
       <div class="cardhead"><h2>Software updates</h2><div class="spacer"></div>
         <button id="uCheck">Check for updates</button></div>
       <div id="updBody"><div class="sethelp">Checking this node's version…</div></div></div>`;
+    html += `<div class="card" style="margin-bottom:12px">
+      <div class="cardhead"><h2>Alerts</h2><div class="spacer"></div>
+        <button id="alertTest">Send test alert</button></div>
+      <div class="sethelp">Fires a test notification to every configured target (Discord, ntfy,
+        Gotify, Telegram, webhook). Configure targets under <span class="mono">alerting.targets</span>
+        in secwatch.yaml — see the docs.</div>
+      <div id="alertTestOut" style="margin-top:6px"></div></div>`;
     for (const sec of d.sections) {
       html += `<div class="card" style="margin-bottom:12px"><h2>${esc(sec.title)}</h2>`;
       for (const f of sec.fields) html += fieldRow(f);
@@ -876,6 +890,15 @@ VIEWS.settings = {
         <button id="revertBtn">Revert</button><button id="saveBtn">Save changes</button></div></div>`;
     $("view").innerHTML = html;
     wireUpdatePanel();
+    $("alertTest").addEventListener("click", async () => {
+      $("alertTest").disabled = true; $("alertTestOut").textContent = "Sending…";
+      const r = await jpost("api/alert/test", {});
+      $("alertTest").disabled = false;
+      if (r.message) { $("alertTestOut").innerHTML = `<span class="msg-err">${esc(r.message)}</span>`; return; }
+      $("alertTestOut").innerHTML = (r.results || []).map(x =>
+        `<div class="checkrow"><span class="cname">${esc(x.type)}</span>
+          <span class="cmsg">${x.ok ? '<span class="msg-ok">✓ ' + esc(x.msg) + '</span>' : '<span class="msg-err">✗ ' + esc(x.msg) + '</span>'}</span></div>`).join("");
+    });
 
     const dirty = new Set();
     const show = () => { $("saveBar").style.display = "block"; };

@@ -36,6 +36,9 @@ def add(conn, ip, rule="manual", reason="", ttl_hours=None, banned_by="auto"):
         return False, f"{ip} is in a trusted network; refusing to ban"
     if _exempt(ip):
         return False, f"{ip} is a shared proxy edge (Cloudflare); refusing to ban"
+    from . import allowlist
+    if allowlist.matches(ip):
+        return False, f"{ip} is on the never-ban allowlist; refusing to ban"
     now = time.time()
     ttl = (ttl_hours if ttl_hours is not None else config.BAN_TTL_HOURS) * 3600
     conn.execute(

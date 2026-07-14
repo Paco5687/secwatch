@@ -140,7 +140,7 @@ def main(argv=None):
         creds = (f"\n   Sign in:   admin / {generated_pw}"
                  f"\n   (auto-generated — SAVE IT; change it in Settings, or re-run with --admin-password)")
     elif user:
-        creds = f"\n   Sign in with the admin account you set."
+        creds = "\n   Sign in with the admin account you set."
     if want:
         ok, how = _start_service(unit)
         if ok:

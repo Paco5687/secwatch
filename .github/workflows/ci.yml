@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+      - name: Lint (ruff)
+        run: ruff check secwatch/ tests/
+      - name: Tests (pytest)
+        run: pytest
+
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Boot secwatch and check /healthz
+        env:
+          SECWATCH_HOST: 127.0.0.1          # loopback: exposure guard is satisfied
+          SECWATCH_PORT: "8931"
+          SECWATCH_DB: /tmp/sw-ci/secwatch.db
+        run: |
+          mkdir -p /tmp/sw-ci
+          python -m secwatch.main &
+          SW_PID=$!
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8931/healthz >/dev/null 2>&1; then
+              echo "secwatch answered /healthz after ${i}s"; OK=1; break
+            fi
+            # fail fast if the process died (e.g. a startup crash / bad guard)
+            kill -0 $SW_PID 2>/dev/null || { echo "secwatch process exited during boot"; exit 1; }
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8931/healthz | tee /dev/stderr | grep -q . || { echo "no /healthz"; exit 1; }
+          kill $SW_PID 2>/dev/null || true
+          test -n "$OK"

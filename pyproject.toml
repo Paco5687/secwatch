@@ -1,0 +1,14 @@
+# Tooling config only (secwatch is run as a module, not pip-installed).
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = [".venv", "data", "dist"]
+
+[tool.ruff.lint]
+# Start conservative: pyflakes-critical (undefined names, bad syntax, unused imports)
+# — catches real breakage without style churn. Broaden over time.
+select = ["E9", "F"]

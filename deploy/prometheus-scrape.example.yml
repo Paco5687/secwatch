@@ -1,0 +1,17 @@
+# Example Prometheus scrape config for secwatch.
+# secwatch exposes GET /metrics (see the `metrics:` block in secwatch.yaml).
+#
+# Auth: /metrics is allowed from loopback, or with a Bearer token (metrics.token),
+# or when the dashboard runs open on a trusted LAN. For a remote scrape with a
+# password-protected dashboard, set metrics.token and use the bearer_token below.
+
+scrape_configs:
+  - job_name: secwatch
+    metrics_path: /metrics
+    # bearer_token: "<value of metrics.token from secwatch.yaml>"
+    static_configs:
+      - targets:
+          - "node-a.lan:8931"
+          - "node-b.lan:8931"
+        # each target's host:port becomes the `instance` label; secwatch also
+        # emits a `node` label (the device name) on secwatch_build_info.

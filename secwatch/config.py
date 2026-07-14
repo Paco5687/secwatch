@@ -219,7 +219,23 @@ UPDATE_AUTO = _bool("SECWATCH_UPDATE_AUTO", "update.auto", False)
 UPDATE_ALLOW_REMOTE = _bool("SECWATCH_UPDATE_ALLOW_REMOTE", "update.allow_remote", True)
 UPDATE_CHECK_INTERVAL = int(_s("SECWATCH_UPDATE_CHECK_INTERVAL", "update.check_interval",
                                6 * 3600))
+# Update channel: "stable" follows the latest signed release TAG (deliberate,
+# verifiable — recommended); "main" follows the bleeding-edge branch tip. Stable
+# falls back to main until the repo has release tags. verify_signature refuses an
+# update whose tag isn't signed by a trusted key (requires importing the
+# maintainer's public key into the node's git/gpg keyring first).
+UPDATE_CHANNEL = _s("SECWATCH_UPDATE_CHANNEL", "update.channel", "stable")
+UPDATE_VERIFY = _bool("SECWATCH_UPDATE_VERIFY", "update.verify_signature", False)
 UPDATE_STATE = DB_PATH.parent / "update-campaign.json"   # last fleet-update seen/applied
+
+# ---- Prometheus metrics -------------------------------------------------
+# GET /metrics exposes a Prometheus snapshot. Gated: loopback, a bearer token, or an
+# already-open (no-auth) LAN dashboard — never unauthenticated on a public interface.
+METRICS_ENABLED = _bool("SECWATCH_METRICS", "metrics.enabled", True)
+METRICS_TOKEN = _s("SECWATCH_METRICS_TOKEN", "metrics.token", "")   # Bearer for scrapers
+
+# Runtime never-ban allowlist (dashboard-editable; see allowlist.py).
+ALLOWLIST_FILE = DB_PATH.parent / "allowlist.json"
 
 # ---- crowd-sourced threat intel (OPT-IN, off by default) ----------------
 # Optionally share confirmed bans (attacker IP + rule + timestamp ONLY — never
@@ -288,6 +304,9 @@ ENDPOINT_RULES = _y("endpoint_rules", []) or []
 EVENT_SUPPRESS = 600
 ALERT_COOLDOWN = 1800
 ALERT_MIN_SEVERITY = _s("SECWATCH_ALERT_MIN_SEVERITY", "alerting.min_severity", "high")
+# Multiple alert targets (ntfy / gotify / telegram / webhook / discord). A bare
+# alerting.discord_webhook_* stays supported as an implicit target. See notifiers.py.
+ALERT_TARGETS = _y("alerting.targets", []) or []
 # Anti-noise: these rules still BAN + record to the dashboard, but do NOT push a
 # Discord alert on their own. They're the constant background of blocked internet
 # scanning (secret-file probes, path scans, floods, hits on privileged endpoints

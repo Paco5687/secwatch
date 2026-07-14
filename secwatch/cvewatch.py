@@ -16,7 +16,7 @@ import time
 import urllib.request
 from pathlib import Path
 
-from . import config, db
+from . import config
 
 log = logging.getLogger("secwatch.cve")
 
@@ -150,7 +150,6 @@ def scan_image(image):
     images (not in any registry) work and nothing is re-pulled — Trivy in its
     container can't see the host's local image store otherwise.
     """
-    import os
     tar = os.path.join(config.TRIVY_CACHE, "scan.tar")
     try:
         save = subprocess.run(["docker", "save", "-o", tar, image],

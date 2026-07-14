@@ -43,12 +43,50 @@ def is_git_checkout():
     return shutil.which("git") is not None and (BASE_DIR / ".git").exists()
 
 
+_SEMVER_TAG = re.compile(r'^v\d+\.\d+\.\d+$')
+
+
 def _upstream_ref():
-    """The tracking ref to compare/pull against (e.g. origin/main)."""
+    """The tracking ref for the branch tip (e.g. origin/main)."""
     rc, out, _ = _git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
     if rc == 0 and out:
         return out
     return "origin/main"
+
+
+def _latest_tag():
+    """Highest vX.Y.Z release tag known locally (after a fetch --tags), or None."""
+    rc, out, _ = _git("tag", "-l", "v*", "--sort=-version:refname")
+    if rc == 0 and out:
+        for line in out.splitlines():
+            if _SEMVER_TAG.match(line.strip()):
+                return line.strip()
+    return None
+
+
+def _target_ref():
+    """(ref, channel_label) to update toward, honoring update.channel. 'stable'
+    follows the latest release tag; until any tag exists it transparently follows
+    the branch tip so a fresh repo still updates."""
+    if config.UPDATE_CHANNEL == "main":
+        return _upstream_ref(), "main"
+    tag = _latest_tag()
+    if tag:
+        return tag, "stable"
+    return _upstream_ref(), "stable (no release tags yet — following main)"
+
+
+def _verify_ref(ref):
+    """If update.verify_signature is on, require a valid signature on a release tag.
+    Returns (ok, message). Non-tag refs (branch tip) can't be verified this way."""
+    if not config.UPDATE_VERIFY or not _SEMVER_TAG.match(ref):
+        return True, ""
+    rc, _, err = _git("verify-tag", ref)
+    if rc != 0:
+        return False, (f"refusing update: signature check failed for {ref} "
+                       f"({(err or 'no trusted signature')[:120]}). Import the "
+                       f"maintainer's public key, or set update.verify_signature: false.")
+    return True, ""
 
 
 def _remote_version(ref):
@@ -68,15 +106,15 @@ def status(fetch=True):
                 "reason": "not a git checkout — update via your package manager or reinstall",
                 "behind": False, "auto": config.UPDATE_AUTO,
                 "allow_remote": config.UPDATE_ALLOW_REMOTE}
-    ref = _upstream_ref()
     fetch_err = None
     if fetch:
-        rc, _, err = _git("fetch", "--quiet", timeout=60)
+        rc, _, err = _git("fetch", "--tags", "--quiet", timeout=60)
         if rc != 0:
             fetch_err = err or "git fetch failed"
+    ref, channel = _target_ref()
     rc, local, _ = _git("rev-parse", "HEAD")
     rc2, remote, _ = _git("rev-parse", ref)
-    # count how many commits we're behind the upstream tip
+    # count how many commits we're behind the target
     behind_n = 0
     rcc, cnt, _ = _git("rev-list", "--count", f"HEAD..{ref}")
     if rcc == 0 and cnt.isdigit():
@@ -84,8 +122,8 @@ def status(fetch=True):
     behind = bool(local and remote and local != remote and behind_n > 0)
     return {"current": __version__, "supported": True, "behind": behind,
             "behind_commits": behind_n, "latest": _remote_version(ref) or "(unknown)",
-            "upstream": ref, "local_sha": local[:9], "remote_sha": remote[:9],
-            "fetch_error": fetch_err, "auto": config.UPDATE_AUTO,
+            "upstream": ref, "channel": channel, "local_sha": local[:9],
+            "remote_sha": remote[:9], "fetch_error": fetch_err, "auto": config.UPDATE_AUTO,
             "allow_remote": config.UPDATE_ALLOW_REMOTE, "updating": _lock.locked()}
 
 
@@ -160,12 +198,15 @@ def self_update(reason="manual"):
     if not _lock.acquire(blocking=False):
         return False, "an update is already in progress"
     try:
-        ref = _upstream_ref()
-        _git("fetch", "--quiet", timeout=60)
+        _git("fetch", "--tags", "--quiet", timeout=60)
+        ref, channel = _target_ref()
         rc, before, _ = _git("rev-parse", "HEAD")
         rc2, remote, _ = _git("rev-parse", ref)
         if rc == 0 and rc2 == 0 and before == remote:
-            return True, f"already up to date ({__version__})"
+            return True, f"already up to date ({__version__}, {channel} channel)"
+        ok, vmsg = _verify_ref(ref)   # supply-chain: refuse an unverified tag if configured
+        if not ok:
+            return False, vmsg
         # snapshot requirements to see if we must reinstall
         rcq, req_before, _ = _git("show", "HEAD:requirements.txt")
         rc, out, err = _git("merge", "--ff-only", ref, timeout=120)

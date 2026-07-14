@@ -3,6 +3,55 @@
 Notable changes per release. secwatch is pre-1.0; only the latest release gets
 security fixes. Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.10.0]
+
+### Added
+- **Demo mode (`python -m secwatch.demo`).** Seeds a throwaway DB with realistic
+  synthetic activity (probes, brute force, a webshell, bans from several sources, a
+  KEV CVE) and serves the dashboard — no config, no real logs — so anyone can see a
+  populated secwatch in one command. Loopback + auth-off + a separate `demo.db`, and
+  it never tails a real log. README "See it first" section; `docs/screenshots/` teed
+  up for a hero shot + GIF.
+- **Packaging.** A CI workflow builds + pushes a **multi-arch image** (amd64 + arm64)
+  to **GHCR** (`ghcr.io/paco5687/secwatch`) on every release tag, and a
+  **Proxmox LXC helper** (`deploy/proxmox-lxc.sh`) creates a Debian container and
+  installs secwatch in it with one command on the PVE host. README documents both.
+- **Ban transparency + a never-ban allowlist.** The IP drill-down now shows *why* an
+  IP was banned (the rule/reason) and its **source** (this node / a named cluster peer
+  / the community list), alongside the existing evidence trail (triggering events +
+  traffic). New actions: **Unban + allowlist** (reverse a ban and never re-ban that
+  IP) and a plain **Allowlist/Remove**. The allowlist is a runtime, dashboard-editable
+  never-ban list (IP or CIDR) enforced in `ban.add`, so *any* source — local, cluster,
+  or community — is refused for an allowlisted address. Kills the "will it lock me out
+  of my own thing?" fear.
+- **Alerts beyond Discord.** A notifier layer delivers alerts to **ntfy, Gotify,
+  Telegram, and a generic webhook** as well as Discord — any number of targets via
+  `alerting.targets`. Discord stays fully back-compatible (rich embeds; a bare
+  webhook is an implicit target). Settings → Alerts has a **"Send test alert"** button
+  that fires a test to every configured target and shows per-target results. A failing
+  target never blocks the others.
+- **Prometheus metrics + Grafana dashboard.** `GET /metrics` exposes a scrape
+  snapshot — events (total + 24h by severity), high-severity count, active bans (and
+  by source), CVE findings (by severity + KEV), log-source lag, and cluster peers —
+  in native Prometheus text format (no new dependency). Gated by loopback / a bearer
+  token (`metrics.token`) / an open-LAN dashboard, never unauthenticated on a public
+  interface. Ships `deploy/grafana-dashboard.json` and a scrape example.
+- **Supply-chain hardening for install + self-update.** Update now follows a
+  **channel**: `stable` (default) tracks the latest signed release **tag** — a
+  deliberate, verifiable version — instead of the bleeding-edge branch tip (`main`);
+  it falls back to `main` until the repo has tags. `update.verify_signature` makes a
+  node run `git verify-tag` and **refuse** an unsigned/untrusted release. `release.sh`
+  now cuts a signed (or annotated) tag and publishes a GitHub Release with a source
+  tarball + `SHA256SUMS`. SECURITY.md documents the full update trust model. The
+  dashboard shows the active channel.
+- **Automated test suite + CI.** A `pytest` suite in `tests/` covers the
+  regression-prone core we'd been checking by hand: the fail-closed exposure guard
+  (public→loopback, private→warn, safe configs), cluster HMAC auth (+ replay window),
+  the roster (version storage/preservation, leaf exclusion), the fleet-update campaign
+  state machine, leaf ban reshare, and `self_update` git fast-forward. A GitHub
+  Actions workflow runs ruff + pytest on Python 3.11–3.13 plus a boot/`/healthz`
+  smoke test on every push and PR. CI badge in the README.
+
 ## [0.9.6]
 
 ### Added

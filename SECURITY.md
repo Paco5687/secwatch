@@ -63,6 +63,32 @@ A short version of the hardening secwatch already tries to enforce:
 - **Front it with TLS** (a reverse proxy or WireGuard) if nodes talk across an
   untrusted network — the HMAC layer authenticates peers but doesn't encrypt.
 
+## Update & supply-chain trust model
+
+secwatch installs and self-updates from its git repo, so **the repository is part of
+your trust boundary**: whoever can push to it (or tamper with the network path of a
+fetch on a node that trusts plain HTTP) can ship code that runs as root on every node
+that updates. Be clear-eyed about that, and reduce it:
+
+- **Follow signed release tags, not the branch tip.** `update.channel: stable`
+  (default) updates to the latest `vX.Y.Z` **release tag** rather than `main`, so a
+  node only moves to a version the maintainer deliberately cut and tagged. Releases
+  are published as GitHub Releases with a source tarball and `SHA256SUMS`.
+- **Verify signatures.** Maintainers sign tags (`git tag -s`); set
+  `update.verify_signature: true` on a node (after importing the maintainer's public
+  key into its git/gpg keyring) to make self-update run `git verify-tag` and **refuse**
+  an unsigned or untrusted tag.
+- **Pin if you want zero surprise.** Leave `update.auto: false` (the default) and
+  update on your schedule; or pin a node to a specific tag and update it by hand.
+- **Fetch over a trusted path.** Clone/fetch over HTTPS or SSH; on untrusted segments,
+  tunnel it. The cluster's HMAC authenticates peers but doesn't encrypt the git path.
+- **A leaf never accepts inbound update commands it can't verify** — fleet updates are
+  gated by `update.allow_remote`, and each node still fetches + (optionally) verifies
+  the code itself; a peer only tells it *when*, not *what bytes to run*.
+
+If you find a way to make a node run code that bypasses these controls, that's exactly
+the kind of report we want — see above.
+
 ## Supported versions
 
 secwatch is pre-1.0 and moves fast; only the **latest release** receives security
