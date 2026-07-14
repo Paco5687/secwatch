@@ -1080,6 +1080,11 @@ async def cluster_event(request: Request):
         return err
     eng = getattr(app.state, "engine", None)
     origin = request.headers.get("x-secwatch-node", "peer")
+    # refresh this leaf's roster entry (esp. its version) so the fleet view is current
+    ident = payload.get("node") or {}
+    if ident.get("name"):
+        cluster.add_peer(ident["name"], ident.get("url", ""),
+                         ident.get("role", "leaf"), ident.get("version"))
     if eng is not None:
         for e in payload.get("events", []):
             rec = {"host": e.get("host", ""), "path": e.get("path", ""),
@@ -1133,7 +1138,7 @@ def _node_stats():
                             (now,)).fetchone()["c"]
         self_row = conn.execute("SELECT last_seen FROM devices WHERE is_self=1 "
                                 "ORDER BY last_seen DESC LIMIT 1").fetchone()
-        return {"node": cluster.node_identity(),
+        return {"node": cluster.node_identity(), "version": __version__,
                 "events_24h": ev["c"] or 0, "high_24h": ev["h"] or 0, "bans": bans,
                 "last_seen": self_row["last_seen"] if self_row else now}
     finally:
@@ -1152,11 +1157,13 @@ async def cluster_overview():
     async def _q(p):
         try:
             r = await asyncio.to_thread(cluster.peer_request, p["url"], "/api/cluster/query", {})
-            return dict(r, self=False, online=True)
+            return dict(r, self=False, online=True,
+                        version=r.get("version") or r.get("node", {}).get("version"))
         except Exception:
             return {"node": {"name": p["name"], "role": p.get("role", "peer"),
                              "url": p.get("url", "")}, "online": False, "self": False,
-                    "events_24h": 0, "high_24h": 0, "bans": 0}
+                    "events_24h": 0, "high_24h": 0, "bans": 0,
+                    "version": p.get("version")}   # last known, from roster
     nodes += await asyncio.gather(*[_q(p) for p in peers])
     # leaves aren't queryable — list them from the roster so they're visible
     seen = {n["node"]["name"] for n in nodes}
@@ -1164,9 +1171,16 @@ async def cluster_overview():
         if p.get("role") == "leaf" and p["name"] not in seen:
             nodes.append({"node": {"name": p["name"], "role": "leaf", "url": ""},
                           "online": None, "self": False, "events_24h": 0,
-                          "high_24h": 0, "bans": 0, "note": "leaf (push-only)"})
+                          "high_24h": 0, "bans": 0, "note": "leaf (push-only)",
+                          "version": p.get("version")})   # last known, from roster
+
+    def _vkey(v):
+        parts = (v or "0").split(".")
+        return tuple(int(x) if x.isdigit() else 0 for x in (parts + ["0", "0", "0"])[:3])
+    known = [n.get("version") for n in nodes if n.get("version")]
+    latest = max(known, key=_vkey) if known else __version__
     return {"enabled": True, "role": config.CLUSTER_ROLE, "self": config.CLUSTER_NAME,
-            "nodes": nodes}
+            "latest_version": latest, "nodes": nodes}
 
 
 def _ensure_cluster_tasks():

@@ -571,15 +571,21 @@ VIEWS.system = {
 };
 
 /* ---------- cluster ---------- */
-function nodeCards(nodes) {
+function verKey(v) { const p = (v || "0").split("."); return (parseInt(p[0]) || 0) * 1e6 + (parseInt(p[1]) || 0) * 1e3 + (parseInt(p[2]) || 0); }
+function nodeCards(nodes, latest) {
   const dot = n => n.online === false ? `<span class="dot off"></span>`
     : n.online === null ? `<span class="dot" style="background:var(--muted)"></span>`
     : `<span class="dot on"></span>`;
   return nodes.map(n => {
     const node = n.node || {};
     const status = n.online === false ? "offline" : n.online === null ? "leaf" : "online";
+    const v = n.version || node.version;
+    const behind = v && latest && verKey(v) < verKey(latest);
+    const verTag = v
+      ? `<span class="tag" title="${behind ? "update available — latest is " + esc(latest) : "up to date"}" style="${behind ? "background:var(--warn,#b8860b);color:#fff" : ""}">v${esc(v)}${behind ? " ⬆" : ""}</span>`
+      : `<span class="tag" title="version unknown">v?</span>`;
     return `<div class="card catcard" style="cursor:default">
-      <div class="catname">${dot(n)}${esc(node.name || "?")} ${n.self ? `<span class="tag">this node</span>` : ""}${node.role === "leaf" ? `<span class="tag">leaf</span>` : ""}</div>
+      <div class="catname">${dot(n)}${esc(node.name || "?")} ${n.self ? `<span class="tag">this node</span>` : ""}${node.role === "leaf" ? `<span class="tag">leaf</span>` : ""}${verTag}</div>
       <div class="catstate ${n.high_24h ? "st-alert" : "st-secure"}">${status.toUpperCase()}</div>
       <div class="catsub">${n.events_24h || 0} events · ${n.high_24h || 0} high · ${n.bans || 0} bans (24h)</div>
     </div>`;
@@ -662,7 +668,7 @@ VIEWS.cluster = {
          <div class="quick"><span><b>${nodes.filter(n => n.online !== false).length}</b>reachable</span>
            <span><b>${totHigh}</b>high (24h)</span><span><b>${totBans}</b>bans</span></div>
        </div>
-       <div class="catgrid">${nodeCards(nodes)}</div>
+       <div class="catgrid">${nodeCards(nodes, d.latest_version)}</div>
        <div class="card" style="margin-top:12px"><div class="cardhead"><h2>Add a device</h2>
          <div class="spacer"></div>
          <select id="cEnrollRole"><option value="peer">peer</option><option value="leaf">leaf</option></select>
@@ -801,6 +807,10 @@ VIEWS.settings = {
       Edits here layer over <span class="mono">secwatch.yaml</span> (env vars still win). Most apply
       immediately; a <span class="tag">restart</span> tag means the change is saved but needs a restart.
       Secrets are stored encrypted on the box.</div></div>`;
+    html += `<div class="card" style="margin-bottom:12px" id="updCard">
+      <div class="cardhead"><h2>Software updates</h2><div class="spacer"></div>
+        <button id="uCheck">Check for updates</button></div>
+      <div id="updBody"><div class="sethelp">Checking this node's version…</div></div></div>`;
     for (const sec of d.sections) {
       html += `<div class="card" style="margin-bottom:12px"><h2>${esc(sec.title)}</h2>`;
       for (const f of sec.fields) html += fieldRow(f);
@@ -810,6 +820,7 @@ VIEWS.settings = {
       <div class="cardhead"><span id="saveMsg" class="rules"></span><div class="spacer"></div>
         <button id="revertBtn">Revert</button><button id="saveBtn">Save changes</button></div></div>`;
     $("view").innerHTML = html;
+    wireUpdatePanel();
 
     const dirty = new Set();
     const show = () => { $("saveBar").style.display = "block"; };

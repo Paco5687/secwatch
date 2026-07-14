@@ -3,6 +3,17 @@
 Notable changes per release. secwatch is pre-1.0; only the latest release gets
 security fixes. Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.9.2]
+
+### Added
+- **Updates work on standalone nodes too** — the *Software updates* card now also
+  lives on the **Settings** page, so a node that isn't in a cluster has a place to
+  check for and apply updates (previously it was only on the Cluster page).
+- **Version badges in the cluster view** — each node shows its running version, with
+  an "update available ⬆" marker when it's behind the newest node in the fleet.
+  Versions propagate via node identity / roster gossip (leaves included, refreshed on
+  their event push).
+
 ## [0.9.1]
 
 ### Security

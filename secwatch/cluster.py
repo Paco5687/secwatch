@@ -28,7 +28,7 @@ import time
 import urllib.error
 import urllib.request
 
-from . import config
+from . import __version__, config
 
 log = logging.getLogger("secwatch.cluster")
 
@@ -72,12 +72,18 @@ def _save_peers(peers):
     os.replace(tmp, config.CLUSTER_STORE)
 
 
-def add_peer(name, url, role="peer"):
+def add_peer(name, url, role="peer", version=None):
     if not name or name == config.CLUSTER_NAME:
         return load_peers()
+    prior = next((p for p in load_peers() if p.get("name") == name), None)
     peers = [p for p in load_peers() if p.get("name") != name]
-    peers.append({"name": name, "url": (url or "").rstrip("/"), "role": role,
-                  "added": time.time()})
+    entry = {"name": name, "url": (url or "").rstrip("/"), "role": role,
+             "added": (prior or {}).get("added", time.time())}
+    # keep the last known version if this update didn't carry a fresh one
+    ver = version or (prior or {}).get("version")
+    if ver:
+        entry["version"] = ver
+    peers.append(entry)
     _save_peers(peers)
     return peers
 
@@ -127,7 +133,7 @@ def peer_request(base_url, path, payload, timeout=8):
 
 def node_identity():
     return {"name": config.CLUSTER_NAME, "role": config.CLUSTER_ROLE,
-            "url": config.CLUSTER_URL}
+            "url": config.CLUSTER_URL, "version": __version__}
 
 
 # ---- in-app setup (called by the dashboard, no CLI needed) ---------------
@@ -156,9 +162,9 @@ def join(peer_url, secret_str):
         return False, (f"couldn't reach {peer_url}: {exc}. Check the URL, that the "
                        f"peer uses the SAME secret, and that this node can reach it.")
     peer = resp.get("node", {})
-    add_peer(peer.get("name"), peer_url, peer.get("role", "peer"))
+    add_peer(peer.get("name"), peer_url, peer.get("role", "peer"), peer.get("version"))
     for p in resp.get("peers", []):
-        add_peer(p.get("name"), p.get("url"), p.get("role", "peer"))
+        add_peer(p.get("name"), p.get("url"), p.get("role", "peer"), p.get("version"))
     log.info("joined cluster via %s", peer_url)
     return True, "Joined — %d peer(s) known." % len(load_peers())
 
@@ -280,21 +286,21 @@ def _pull_blocklists(conn):
 
 def _gossip_roster():
     """Converge membership: share my roster with peers, learn theirs."""
-    mine = [{"name": p["name"], "url": p.get("url", ""), "role": p.get("role", "peer")}
-            for p in load_peers()]
+    mine = [{"name": p["name"], "url": p.get("url", ""), "role": p.get("role", "peer"),
+             "version": p.get("version")} for p in load_peers()]
     mine.append(node_identity())
     for p in queryable_peers():
         try:
             resp = peer_request(p["url"], "/api/cluster/roster", {"peers": mine})
             for q in resp.get("peers", []):
-                add_peer(q.get("name"), q.get("url"), q.get("role", "peer"))
+                add_peer(q.get("name"), q.get("url"), q.get("role", "peer"), q.get("version"))
         except Exception as exc:
             log.debug("cluster roster gossip to %s failed: %s", p["name"], exc)
 
 
 def merge_roster(peers):
     for q in peers or []:
-        add_peer(q.get("name"), q.get("url"), q.get("role", "peer"))
+        add_peer(q.get("name"), q.get("url"), q.get("role", "peer"), q.get("version"))
 
 
 def local_blocklist(conn):
@@ -353,7 +359,8 @@ def push_events_since(last_id):
         return last_id
     evs = [dict(r, device=config.CLUSTER_NAME) for r in rows]
     try:
-        peer_request(peer["url"], "/api/cluster/event", {"events": evs})
+        peer_request(peer["url"], "/api/cluster/event",
+                     {"events": evs, "node": node_identity()})
         return rows[-1]["id"]
     except Exception as exc:
         log.debug("leaf event push failed: %s", exc)
