@@ -82,6 +82,12 @@ Customize with env vars: `SECWATCH_PORT`, `SECWATCH_ADMIN_PASSWORD`,
 `SECWATCH_NO_AUTH=1` (open dashboard on a trusted LAN), `SECWATCH_NO_START=1`,
 `SECWATCH_NO_UV=1` (skip uv, use the system Python).
 
+> **Fails closed:** secwatch will **refuse to start** if it would serve the
+> dashboard on a network interface (e.g. `0.0.0.0`) with no password set — so a
+> hand-run install can't accidentally expose an unauthenticated dashboard. Set a
+> password (the installer does), bind `SECWATCH_HOST=127.0.0.1`, or opt in
+> explicitly with `SECWATCH_NO_AUTH=1` for a trusted LAN / proxy-authenticated setup.
+
 Prefer to review the code first? Clone and run the same installer:
 
 ```bash
@@ -191,11 +197,18 @@ and troubleshooting.
 Python 3.11+. Optional: Docker (CVE scan + container watch), an OpenAI-compatible
 LLM endpoint (AI analysis), `nft`/`nginx` for those ban actuators.
 
+## Security
+
+Found a vulnerability in secwatch? **Please report it privately** — see
+[SECURITY.md](SECURITY.md) for the disclosure process. Don't open a public issue for
+security bugs, and don't file exploit details for third-party software here.
+
 ## Contributing
 
 Issues and PRs welcome — new log-source/ban adapters, detection rules, and distro
-testing especially. secwatch is young; real-world reports make it better. Please
-don't file exploit details for third-party software here.
+testing especially. secwatch is young; real-world reports make it better. See
+[CONTRIBUTING.md](CONTRIBUTING.md) and our [Code of Conduct](CODE_OF_CONDUCT.md);
+release-by-release changes are in [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 

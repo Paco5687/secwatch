@@ -83,7 +83,9 @@ def main(argv=None):
     # auth
     generated_pw = None
     if args.no_auth:
-        draft["auth"] = {"enabled": False}
+        # allow_insecure is the explicit acknowledgement that lets secwatch start
+        # without a login on a network interface (the startup guard checks it).
+        draft["auth"] = {"enabled": False, "allow_insecure": True}
         print("\n! dashboard auth DISABLED — only safe behind an authenticating "
               "proxy or on a fully trusted network.", file=sys.stderr)
         user = None

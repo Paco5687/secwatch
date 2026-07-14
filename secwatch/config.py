@@ -382,6 +382,33 @@ AUTH_SESSION_TTL = int(_s(None, "auth.session_ttl", 86400))
 AUTH_TRUST_PROXY_FROM = _list("SECWATCH_AUTH_TRUST_PROXY_FROM",
                               "auth.trust_proxy_from", ["127.0.0.1/32", "::1/128"])
 AUTH_MAX_FAILS = int(_s(None, "auth.max_fails", 8))
+# Explicit opt-in to run WITHOUT a dashboard login on a public interface (e.g. on a
+# trusted LAN, or behind a proxy that authenticates). Without this, secwatch refuses
+# to start when it would otherwise serve an unauthenticated dashboard to the network.
+AUTH_INSECURE_OK = _bool("SECWATCH_NO_AUTH", "auth.allow_insecure", False)
+
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "::ffff:127.0.0.1", ""}
+
+
+def insecure_exposure_reason():
+    """If we're about to serve the dashboard on a NON-loopback interface with no
+    working login and no explicit opt-out, return an actionable message (so the
+    caller can fail closed). Otherwise return None."""
+    exposed = LISTEN_HOST not in _LOOPBACK_HOSTS
+    protected = bool(AUTH_ENABLED and AUTH_PASSWORD_HASH)
+    if not exposed or protected or AUTH_INSECURE_OK:
+        return None
+    return (
+        f"REFUSING TO START: secwatch would serve its dashboard on "
+        f"{LISTEN_HOST}:{LISTEN_PORT} — a network-reachable interface — with NO login "
+        f"configured. Anyone who can reach this host could view (and control) it.\n"
+        f"  Fix ONE of:\n"
+        f"   • set a password:   re-run ./install.sh, or set auth.enabled: true + "
+        f"auth.password_hash in secwatch.yaml\n"
+        f"   • bind to localhost: SECWATCH_HOST=127.0.0.1 (then reach it via SSH tunnel "
+        f"or an authenticating proxy)\n"
+        f"   • run open on purpose (trusted LAN / proxy does auth): set "
+        f"SECWATCH_NO_AUTH=1  or  auth.allow_insecure: true")
 AUTH_LOCKOUT_SECS = int(_s(None, "auth.lockout_secs", 300))
 
 # ---- self-maintenance (health + update awareness) -----------------------
