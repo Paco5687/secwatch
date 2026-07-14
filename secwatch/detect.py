@@ -335,6 +335,10 @@ class Engine:
         if (alert and rule in config.ALERT_QUIET_RULES
                 and not (config.ALERT_QUIET_EXCEPT_PRIVATE and ip and is_private(ip))):
             alert = False
+        if alert:   # targeted false-positive mutes created from an event row
+            from . import mutes
+            if mutes.is_muted(rule, ip, rec.get("host", ""), detail):
+                alert = False
         if alert:
             self.alert_gate[key] = now + config.ALERT_COOLDOWN
 

@@ -236,6 +236,8 @@ METRICS_TOKEN = _s("SECWATCH_METRICS_TOKEN", "metrics.token", "")   # Bearer for
 
 # Runtime never-ban allowlist (dashboard-editable; see allowlist.py).
 ALLOWLIST_FILE = DB_PATH.parent / "allowlist.json"
+# Alert mutes — targeted false-positive suppression created from an event row.
+MUTES_FILE = DB_PATH.parent / "mutes.json"
 
 # ---- crowd-sourced threat intel (OPT-IN, off by default) ----------------
 # Optionally share confirmed bans (attacker IP + rule + timestamp ONLY — never

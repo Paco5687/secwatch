@@ -3,6 +3,20 @@
 Notable changes per release. secwatch is pre-1.0; only the latest release gets
 security fixes. Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.10.1]
+
+### Added
+- **Inline ban / allowlist / mute in the Events rows.** Every event row now has
+  one-click actions: **ban** or **allowlist** its IP, and **mute** — a *targeted*
+  false-positive suppressor. A mute is scoped from the event: by IP, by host (e.g.
+  silence `edge_silent` on a node that isn't really your edge proxy), or by an
+  editable **detail substring** (e.g. your own `curl | bash` installer URL, so a
+  `dropper` alert for your own tooling stops firing) — never the blunt whole-rule
+  silence unless you choose it. Muted events are still recorded; they just don't
+  alert. A **Suppression** card in Settings lists the allowlist + mutes and removes
+  them. Endpoints: `GET /api/mutes`, `POST /api/mute`; check lives in
+  `detect.Engine._event`.
+
 ## [0.10.0]
 
 ### Added

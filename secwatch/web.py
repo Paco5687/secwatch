@@ -624,6 +624,25 @@ def get_allowlist():
     return {"entries": allowlist.load()}
 
 
+@app.get("/api/mutes")
+def get_mutes():
+    from . import mutes
+    return {"mutes": mutes.load()}
+
+
+@app.post("/api/mute")
+def edit_mute(payload: dict = Body(...)):
+    """Create/remove an alert mute from an event row. {rule, field, value, action}."""
+    from . import mutes
+    rule, field, value = (payload.get("rule"), payload.get("field", "*"),
+                          payload.get("value", ""))
+    if payload.get("action") == "remove":
+        mutes.remove(rule, field, value)
+        return {"ok": True, "mutes": mutes.load()}
+    ok, msg = mutes.add(rule, field, value)
+    return {"ok": ok, "message": msg, "mutes": mutes.load()}
+
+
 @app.post("/api/allowlist")
 def edit_allowlist(payload: dict = Body(...)):
     """Add or remove an allowlist entry. {entry, action: add|remove}."""

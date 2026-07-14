@@ -262,6 +262,26 @@ VIEWS.overview = {
 };
 
 /* ---------- events (shared by Events + Host views) ---------- */
+// Build the mute scope for an event: an IP event mutes by IP; a process event
+// (dropper/reverse_shell/…) mutes by an editable detail substring (e.g. your own
+// installer URL); otherwise by host, or the whole rule as a last resort.
+function eventMuteScope(e) {
+  if (e.ip && e.ip !== "-") return {rule: e.rule, field: "ip", value: e.ip};
+  const proc = ["dropper", "reverse_shell", "crypto_miner", "exec_suspicious", "exec_deleted", "egress_new"];
+  if (proc.includes(e.rule) && e.detail) {
+    const url = (e.detail.match(/https?:\/\/[^\s|"']+/) || [])[0];
+    const suggested = url || e.detail.replace(/pid \d+/i, "").replace(/\s+/g, " ").trim().slice(0, 80);
+    const v = prompt(`Mute "${e.rule}" alerts whose detail contains:`, suggested);
+    return (v && v.trim()) ? {rule: e.rule, field: "detail", value: v.trim()} : null;
+  }
+  if (e.host) {
+    if (!confirm(`Stop alerting on "${e.rule}" from host "${e.host}"?`)) return null;
+    return {rule: e.rule, field: "host", value: e.host};
+  }
+  if (!confirm(`Stop alerting on ALL "${e.rule}" events?`)) return null;
+  return {rule: e.rule, field: "*", value: ""};
+}
+
 async function renderEventTable(params, opts) {
   const hours = hoursSel();
   const q = new URLSearchParams({hours, limit: 400});
@@ -270,15 +290,22 @@ async function renderEventTable(params, opts) {
   const [data, fleet] = await Promise.all([jget(`api/events?${q}`), jget("api/devices").catch(() => ({devices: [], count: 0}))]);
   const rules = [...new Set(data.events.map(e => e.rule))].sort();
   const multi = (fleet.count || 0) > 1;   // only surface device UI on a real fleet
-  const rows = data.events.map(e =>
+  const hasIp = e => e.ip && e.ip !== "-";
+  const bstyle = 'style="font-size:11px;padding:2px 6px;margin-left:3px"';
+  const rows = data.events.map((e, idx) =>
     `<tr><td class="mono" style="white-space:nowrap">${fmtT(e.ts)}</td><td>${chip(e.severity)}</td>` +
     `<td><span class="rulechip" data-rule="${esc(e.rule)}">${esc(e.rule)}</span></td>` +
     (multi ? `<td><span class="rulechip" data-dev="${esc(e.device || "")}">${esc(e.device || "—")}</span></td>` : "") +
     `<td>${ipLink(e.ip)}</td><td>${esc(e.host)}</td>` +
     `<td class="path" title="${esc(e.path)}">${esc(e.path)}</td>` +
     `<td style="font-size:12.5px;color:var(--ink2)">${esc(e.detail)}${e.alerted ? " 🔔" : ""}</td>` +
-    `<td class="mono">${e.count}</td></tr>`).join("");
-  const ncol = multi ? 9 : 8;
+    `<td class="mono">${e.count}</td>` +
+    `<td class="rowacts" style="white-space:nowrap;text-align:right">` +
+    (hasIp(e) ? `<button class="danger" data-ban="${idx}" ${bstyle} title="ban this IP">ban</button>` +
+                `<button data-allow="${idx}" ${bstyle} title="never ban this IP">allow</button>` : "") +
+    `<button data-mute="${idx}" ${bstyle} title="stop alerting on this (still logged)">mute</button>` +
+    `</td></tr>`).join("");
+  const ncol = multi ? 10 : 9;
 
   $("view").innerHTML =
     `<div class="card">
@@ -298,7 +325,7 @@ async function renderEventTable(params, opts) {
         <span class="rules" style="margin-left:auto">${data.events.length} shown</span>
       </div>
       <div class="tablewrap"><table>
-        <thead><tr><th>Time</th><th>Sev</th><th>Rule</th>${multi ? "<th>Device</th>" : ""}<th>IP</th><th>Host</th><th>Path</th><th>Detail</th><th>N</th></tr></thead>
+        <thead><tr><th>Time</th><th>Sev</th><th>Rule</th>${multi ? "<th>Device</th>" : ""}<th>IP</th><th>Host</th><th>Path</th><th>Detail</th><th>N</th><th></th></tr></thead>
         <tbody>${rows || `<tr><td colspan="${ncol}" class="empty">No events match.</td></tr>`}</tbody>
       </table></div>
     </div>`;
@@ -317,6 +344,23 @@ async function renderEventTable(params, opts) {
   const cc = $("fClearCat"); if (cc) cc.addEventListener("click", () => upd({cat: ""}));
   document.querySelectorAll(".rulechip").forEach(el =>
     el.addEventListener("click", () => upd(el.dataset.dev !== undefined ? {device: el.dataset.dev} : {rule: el.dataset.rule})));
+
+  // inline row actions: ban / allowlist an IP, or mute a false-positive alert type
+  const done = (el, txt) => { el.textContent = txt; el.disabled = true; };
+  document.querySelectorAll("[data-ban]").forEach(el => el.addEventListener("click", async () => {
+    const e = data.events[+el.dataset.ban];
+    if (!confirm(`Ban ${e.ip}?`)) return;
+    const r = await jpost("api/ban", {ip: e.ip}); done(el, r.ok ? "banned ✓" : "✗");
+  }));
+  document.querySelectorAll("[data-allow]").forEach(el => el.addEventListener("click", async () => {
+    const e = data.events[+el.dataset.allow];
+    const r = await jpost("api/allowlist", {entry: e.ip, action: "add"}); done(el, r.ok ? "allowed ✓" : "✗");
+  }));
+  document.querySelectorAll("[data-mute]").forEach(el => el.addEventListener("click", async () => {
+    const m = eventMuteScope(data.events[+el.dataset.mute]);
+    if (!m) return;
+    const r = await jpost("api/mute", m); done(el, r.ok ? "muted ✓" : "✗");
+  }));
 }
 VIEWS.events = { title: "Events", render: p => renderEventTable(p, {viewName: "events"}) };
 VIEWS.host = { title: "Host / EDR", render: p => renderEventTable(p, {viewName: "host", forceCat: p.get("cat") || "host,files"}) };
@@ -830,6 +874,33 @@ async function wireUpdatePanel() {
   load();
 }
 
+async function wireSuppression() {
+  const body = $("supprBody"); if (!body) return;
+  const [al, mu] = await Promise.all([
+    jget("api/allowlist").catch(() => ({entries: []})),
+    jget("api/mutes").catch(() => ({mutes: []})),
+  ]);
+  const rows = [];
+  (al.entries || []).forEach(ip => rows.push(
+    `<div class="checkrow"><span class="tag">allowlist</span>
+       <span class="cname mono">${esc(ip)}</span><div class="spacer" style="flex:1"></div>
+       <button data-rmallow="${esc(ip)}">remove</button></div>`));
+  (mu.mutes || []).forEach(m => rows.push(
+    `<div class="checkrow"><span class="tag">mute</span>
+       <span class="cname mono">${esc(m.rule)}</span>
+       <span class="cmsg">${esc(m.field)}${m.value ? ": " + esc(m.value) : ""}</span>
+       <div class="spacer" style="flex:1"></div>
+       <button data-rmmute='${esc(JSON.stringify(m))}'>remove</button></div>`));
+  body.innerHTML = rows.length ? rows.join("") : `<div class="empty">Nothing suppressed.</div>`;
+  body.querySelectorAll("[data-rmallow]").forEach(el => el.addEventListener("click", async () => {
+    await jpost("api/allowlist", {entry: el.dataset.rmallow, action: "remove"}); wireSuppression();
+  }));
+  body.querySelectorAll("[data-rmmute]").forEach(el => el.addEventListener("click", async () => {
+    const m = JSON.parse(el.dataset.rmmute);
+    await jpost("api/mute", {rule: m.rule, field: m.field, value: m.value, action: "remove"}); wireSuppression();
+  }));
+}
+
 /* ---------- settings ---------- */
 function setControl(f) {
   const ro = f.readonly ? "disabled" : "";
@@ -880,6 +951,10 @@ VIEWS.settings = {
         Gotify, Telegram, webhook). Configure targets under <span class="mono">alerting.targets</span>
         in secwatch.yaml — see the docs.</div>
       <div id="alertTestOut" style="margin-top:6px"></div></div>`;
+    html += `<div class="card" style="margin-bottom:12px">
+      <div class="cardhead"><h2>Suppression</h2></div>
+      <div class="sethelp">Never-ban <b>allowlist</b> (IPs) and muted <b>alert</b> types — created from the Events / IP drill-down. Remove an entry to re-enable it.</div>
+      <div id="supprBody" style="margin-top:6px"><div class="sethelp">loading…</div></div></div>`;
     for (const sec of d.sections) {
       html += `<div class="card" style="margin-bottom:12px"><h2>${esc(sec.title)}</h2>`;
       for (const f of sec.fields) html += fieldRow(f);
@@ -890,6 +965,7 @@ VIEWS.settings = {
         <button id="revertBtn">Revert</button><button id="saveBtn">Save changes</button></div></div>`;
     $("view").innerHTML = html;
     wireUpdatePanel();
+    wireSuppression();
     $("alertTest").addEventListener("click", async () => {
       $("alertTest").disabled = true; $("alertTestOut").textContent = "Sending…";
       const r = await jpost("api/alert/test", {});
