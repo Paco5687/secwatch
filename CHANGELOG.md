@@ -3,6 +3,16 @@
 Notable changes per release. secwatch is pre-1.0; only the latest release gets
 security fixes. Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.9.6]
+
+### Added
+- **Change a node's role from the dashboard.** The Cluster → *Manage cluster* card now
+  has a peer/leaf selector, so you can flip a node between peer and leaf without SSHing
+  in to edit config. It persists to the node's config (visible to the CLI and dashboard
+  alike — no env-vs-config split) and applies live; restart to fully settle a
+  peer↔leaf switch. (Enrollment already persisted the role chosen at "Add device"
+  time; this covers changing it afterward.)
+
 ## [0.9.5]
 
 ### Fixed

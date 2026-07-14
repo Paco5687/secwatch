@@ -720,10 +720,28 @@ VIEWS.cluster = {
        <div class="card" style="margin-top:12px"><div class="cardhead"><h2>Manage cluster</h2>
          <div class="spacer"></div><button id="cReveal">Show secret</button>
          <button id="cLeave" class="danger">Leave cluster</button></div>
+         <div class="checkrow" style="margin-top:6px"><span class="cname">This node's role</span>
+           <div class="spacer" style="flex:1"></div>
+           <select id="cRole">
+             <option value="peer"${cfg.role === "peer" ? " selected" : ""}>peer — full member (reachable, viewable)</option>
+             <option value="leaf"${cfg.role === "leaf" ? " selected" : ""}>leaf — push-only (firewalled / exposed box)</option>
+           </select>
+           <button id="cRoleSave">Save role</button><span id="cRoleMsg" class="cmsg"></span></div>
+         <div class="sethelp">Persists to this node's config (no SSH needed). Switching to <b>leaf</b> makes it push-only and firewall-safe; to <b>peer</b> makes it reachable + viewable. Restart the service to fully apply.</div>
          <div id="cSecretReveal"></div>
          ${peerRows ? `<div style="margin-top:10px">${peerRows}</div>` : `<div class="empty">No peers yet — add a device above, or share the secret to join another node.</div>`}
        </div>`;
     wireUpdatePanel();
+    $("cRoleSave").addEventListener("click", async () => {
+      const role = $("cRole").value;
+      if (role === cfg.role) { $("cRoleMsg").textContent = "already " + role; return; }
+      $("cRoleSave").disabled = true; $("cRoleMsg").textContent = "saving…";
+      const r = await jpost("api/cluster/setup", {action: "role", role});
+      $("cRoleSave").disabled = false;
+      $("cRoleMsg").innerHTML = r.ok
+        ? `<span class="msg-ok">saved — restart the service to fully apply</span>`
+        : `<span class="msg-err">${esc(r.message || "failed")}</span>`;
+    });
     $("cEnroll").addEventListener("click", async () => {
       $("cEnroll").disabled = true;
       const r = await jpost("api/cluster/enroll", {role: $("cEnrollRole").value});
