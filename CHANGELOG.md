@@ -3,6 +3,15 @@
 Notable changes per release. secwatch is pre-1.0; only the latest release gets
 security fixes. Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.11.1]
+
+### Security
+- **Signed releases.** Release tags are now GPG-signed by the maintainer. The public
+  key ships in [`KEYS`](KEYS) (fingerprint in SECURITY.md); verify any release with
+  `gpg --import KEYS && git verify-tag vX.Y.Z`. `update.verify_signature: true` makes a
+  node refuse an unsigned/untrusted tag. `release.sh` signs the tag when a signing key
+  is configured (it now is).
+
 ## [0.11.0]
 
 ### Added

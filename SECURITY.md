@@ -74,10 +74,24 @@ that updates. Be clear-eyed about that, and reduce it:
   (default) updates to the latest `vX.Y.Z` **release tag** rather than `main`, so a
   node only moves to a version the maintainer deliberately cut and tagged. Releases
   are published as GitHub Releases with a source tarball and `SHA256SUMS`.
-- **Verify signatures.** Maintainers sign tags (`git tag -s`); set
-  `update.verify_signature: true` on a node (after importing the maintainer's public
-  key into its git/gpg keyring) to make self-update run `git verify-tag` and **refuse**
-  an unsigned or untrusted tag.
+- **Verify signatures.** Release tags are **GPG-signed**. The maintainer's public key
+  is in [`KEYS`](KEYS) in this repo; its fingerprint is:
+
+  ```
+  F09F AE2D F0EA 30DC DA34  AB93 BE63 96E3 59FE 03B5
+  ```
+
+  Verify a release before trusting it:
+
+  ```bash
+  gpg --import KEYS
+  git verify-tag v0.11.1          # "Good signature" from the fingerprint above
+  ```
+
+  Set `update.verify_signature: true` on a node (after `gpg --import KEYS` into the
+  service user's keyring) to make self-update run `git verify-tag` and **refuse** any
+  unsigned or untrusted tag. (Commits are unsigned by policy; release *tags* are the
+  trust anchor.)
 - **Pin if you want zero surprise.** Leave `update.auto: false` (the default) and
   update on your schedule; or pin a node to a specific tag and update it by hand.
 - **Fetch over a trusted path.** Clone/fetch over HTTPS or SSH; on untrusted segments,
