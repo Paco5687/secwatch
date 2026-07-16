@@ -1,4 +1,9 @@
-<h1 align="center">secwatch</h1>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/logo-dark.svg">
+    <img alt="secwatch" src="docs/brand/logo-light.svg" width="300">
+  </picture>
+</p>
 
 <p align="center">
   <b>The easy, all-in-one security monitor for your self-hosted server.</b><br>

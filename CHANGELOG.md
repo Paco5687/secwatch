@@ -6,6 +6,10 @@ security fixes. Format loosely follows [Keep a Changelog](https://keepachangelog
 ## [0.11.3]
 
 ### Added
+- **A logo.** A shield-with-monitoring-pulse mark + the `secwatch_` terminal wordmark
+  (cyan accent, matching the dashboard). Ships as `docs/brand/` SVGs (light + dark
+  lockups, square mark), in the README header (theme-aware via `<picture>`), and as
+  the dashboard's favicon.
 - **Dashboard screenshots in the README** — hero overview + a "look inside" gallery
   (ban explainability, CVE/KEV, in-app settings) and the three themes (Ops / Terminal
   / Light). Captured from `--demo`, so entirely synthetic.

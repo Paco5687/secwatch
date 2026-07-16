@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 64" width="300" height="64" role="img" aria-label="secwatch">
+  <g transform="translate(8,8)">
+    <path d="M24 4 L41 10 V24 C41 34 33 41 24 45 C15 41 7 34 7 24 V10 Z" fill="#0c1a2b" stroke="#22d3ee" stroke-width="2" stroke-linejoin="round"/>
+    <path d="M13 26 h6 l3 -8 l4 15 l3 -10 h4" fill="none" stroke="#22d3ee" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <text x="70" y="42" font-family="ui-monospace, SFMono-Regular, Menlo, 'DejaVu Sans Mono', monospace" font-size="34" font-weight="700" letter-spacing="-1" fill="#e8f0f7">secwatch<tspan fill="#22d3ee">_</tspan></text>
+</svg>
