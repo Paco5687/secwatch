@@ -3,14 +3,19 @@
 Notable changes per release. secwatch is pre-1.0; only the latest release gets
 security fixes. Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.11.5]
+
+### Added
+- **Social-preview card.** A 1280×640 branded card (`docs/brand/social-card.png` +
+  source SVG) for GitHub's Social preview and link unfurls (Discord, Slack, X, …).
+
 ## [0.11.4]
 
 ### Added
-- **A logo + brand kit.** A shield-with-monitoring-pulse mark + the `secwatch_`
-  terminal wordmark (cyan accent, matching the dashboard). Ships as `docs/brand/`
-  assets — light + dark lockups, a square mark, and a **1280×640 social-preview card**
-  (`social-card.png`, for GitHub's social preview / link unfurls). In the README
-  header (theme-aware via `<picture>`) and the dashboard favicon.
+- **A logo.** A shield-with-monitoring-pulse mark + the `secwatch_` terminal wordmark
+  (cyan accent, matching the dashboard). Ships as `docs/brand/` SVGs (light + dark
+  lockups, square mark), in the README header (theme-aware via `<picture>`), and as
+  the dashboard favicon.
 
 ## [0.11.3]
 
