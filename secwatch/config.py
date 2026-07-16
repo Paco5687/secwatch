@@ -239,6 +239,28 @@ ALLOWLIST_FILE = DB_PATH.parent / "allowlist.json"
 # Alert mutes — targeted false-positive suppression created from an event row.
 MUTES_FILE = DB_PATH.parent / "mutes.json"
 
+# ---- kernwatch: host hang/crash early-warning + self-heal ----------------
+# Watches the kernel log for ANY fault class that can lead to a hang (IOMMU/DMA,
+# MCE/EDAC, soft/hard lockups, rcu stalls, OOM, storage/nvme/ata errors, pcie AER,
+# thermal, NIC hangs) AND resource precursors (disk near-full, memory exhaustion,
+# runaway load / stuck-I/O). Detection + forensic SNAPSHOTS are on by default; a
+# hard freeze can't be fixed live, so the snapshot (state captured the moment a
+# precursor appears) is the point. Active remediation (disk cleanup, restarting
+# failed units) is OPT-IN — off by default on your primary box.
+KERNWATCH_ENABLED = _bool("SECWATCH_KERNWATCH", "kernwatch.enabled", True)
+KERNWATCH_INTERVAL = int(_s("SECWATCH_KERNWATCH_INTERVAL", "kernwatch.interval", 60))
+KERNWATCH_SNAPSHOT = _bool("SECWATCH_KERNWATCH_SNAPSHOT", "kernwatch.snapshot", True)
+KERNWATCH_AUTOFIX = _bool("SECWATCH_KERNWATCH_AUTOFIX", "kernwatch.autofix", False)
+KERNWATCH_AUTOFIX_ACTIONS = _list("SECWATCH_KERNWATCH_ACTIONS", "kernwatch.autofix_actions",
+                                  ["disk_cleanup", "restart_failed"])
+KERNWATCH_DISK_PCT = int(_s(None, "kernwatch.disk_pct", 92))          # root fs full → hangs
+KERNWATCH_MEM_AVAIL_PCT = int(_s(None, "kernwatch.mem_avail_pct", 5))  # available RAM floor
+KERNWATCH_LOAD_FACTOR = float(_s(None, "kernwatch.load_factor", 6))    # load1 > cores*factor
+KERNWATCH_DSTATE = int(_s(None, "kernwatch.dstate", 10))               # uninterruptible procs
+KERNWATCH_TEMP_WARN = int(_s(None, "kernwatch.temp_warn", 90))         # °C
+KERNWATCH_SNAPSHOT_DIR = DB_PATH.parent / "snapshots"
+KERNWATCH_CURSOR = DB_PATH.parent / "kernwatch.cursor"
+
 # ---- crowd-sourced threat intel (OPT-IN, off by default) ----------------
 # Optionally share confirmed bans (attacker IP + rule + timestamp ONLY — never
 # your traffic or data) with a self-hostable aggregator, and pull its consensus

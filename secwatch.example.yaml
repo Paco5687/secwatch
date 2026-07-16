@@ -81,6 +81,19 @@ metrics:
   token: ""                 # optional Bearer token for remote scrapers; loopback +
                             # open-LAN dashboards don't need it (see deploy/prometheus-scrape.example.yml)
 
+# kernwatch — host hang/crash early-warning + self-heal. Watches the kernel log
+# (IOMMU/MCE/lockups/OOM/storage/thermal/pcie/nic) AND resource precursors (disk
+# near-full, RAM exhaustion, stuck-I/O). On a high-severity precursor it captures a
+# forensic SNAPSHOT so a freeze isn't a black hole. See Dashboard → Self-heal.
+kernwatch:
+  enabled: true
+  snapshot: true            # capture host state on a high-severity precursor (safe, read-only)
+  autofix: false            # OPT-IN: run safe live fixes (off by default on a prod box)
+  # autofix_actions: [disk_cleanup, restart_failed]
+  # disk_pct: 92            # root fs %-used that trips a disk_full precursor
+  # mem_avail_pct: 5        # available-RAM floor
+  # temp_warn: 90           # °C
+
 update:
   auto: false               # check the origin on a schedule and update if behind
   allow_remote: true        # accept a fleet update pushed/pulled from a cluster peer

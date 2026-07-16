@@ -16,8 +16,8 @@ from fastapi.staticfiles import StaticFiles
 
 from . import (__version__, auth, auditwatch, authwatch, ban, cluster,
                config, cvewatch, db, detect, dockerwatch, fimwatch, healthwatch,
-               hostwatch, llm_analysis, logsources, metrics, notifiers, parser,
-               procwatch, tailer, update)
+               hostwatch, kernwatch, llm_analysis, logsources, metrics, notifiers,
+               parser, procwatch, tailer, update)
 
 log = logging.getLogger("secwatch.web")
 
@@ -347,6 +347,7 @@ async def lifespan(app: FastAPI):
             asyncio.create_task(fimwatch.FimWatcher(engine, conn).run(), name="fim"),
             asyncio.create_task(procwatch.ProcWatcher(engine, conn).run(), name="proc"),
             asyncio.create_task(auditwatch.AuditWatcher(engine, conn).run(), name="audit"),
+            asyncio.create_task(kernwatch.KernWatcher(engine, conn).run(), name="kernwatch"),
         ]
     else:
         log.info("mode=%s — host collectors expected from a separate agent",
@@ -622,6 +623,26 @@ def unban_ip(payload: dict = Body(...)):
 def get_allowlist():
     from . import allowlist
     return {"entries": allowlist.load()}
+
+
+@app.get("/api/remediations")
+def get_remediations(limit: int = Query(100, ge=1, le=500)):
+    """kernwatch self-heal audit log — what it saw, did, and whether it resolved."""
+    conn = db.connect(readonly=True)
+    try:
+        rows = [dict(r) for r in conn.execute(
+            "SELECT * FROM remediations ORDER BY ts DESC LIMIT ?", (limit,))]
+        return {"remediations": rows, "autofix": config.KERNWATCH_AUTOFIX,
+                "snapshot": config.KERNWATCH_SNAPSHOT, "enabled": config.KERNWATCH_ENABLED}
+    finally:
+        conn.close()
+
+
+@app.post("/api/remediations/snapshot")
+async def take_snapshot():
+    """Capture a forensic host snapshot on demand."""
+    path = await asyncio.to_thread(kernwatch.capture_snapshot, "manual (dashboard)")
+    return {"ok": bool(path), "path": path}
 
 
 @app.get("/api/mutes")

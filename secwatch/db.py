@@ -98,6 +98,21 @@ CREATE TABLE IF NOT EXISTS analyses(
   json TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_analyses_ts ON analyses(ts);
+
+-- kernwatch self-heal audit: one row per detected hang-precursor / kernel fault
+-- and whatever action (snapshot / remediation / advisory) was taken.
+CREATE TABLE IF NOT EXISTS remediations(
+  id INTEGER PRIMARY KEY,
+  ts REAL NOT NULL,
+  category TEXT NOT NULL,      -- iommu | mce | lockup | oom | disk_full | mem_pressure | io_stall | thermal | ...
+  severity TEXT NOT NULL,
+  trigger TEXT,                -- the kernel line or the metric that fired it
+  action TEXT,                 -- snapshot | disk_cleanup | restart_failed | advisory | none
+  result TEXT,                 -- ok | failed | advisory | skipped | resolved | unresolved
+  detail TEXT,                 -- human summary + before/after
+  snapshot TEXT                -- path to a forensic snapshot file, if captured
+);
+CREATE INDEX IF NOT EXISTS idx_remediations_ts ON remediations(ts);
 """
 
 

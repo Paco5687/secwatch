@@ -399,6 +399,43 @@ VIEWS.bans = {
   },
 };
 
+/* ---------- self-heal (kernwatch) ---------- */
+VIEWS.selfheal = {
+  title: "Self-heal",
+  async render() {
+    const d = await jget("api/remediations").catch(() => ({remediations: [], enabled: false}));
+    const rz = { resolved: "msg-ok", ok: "msg-ok", advisory: "", unresolved: "msg-err", failed: "msg-err", skipped: "" };
+    const rows = (d.remediations || []).map(r =>
+      `<tr><td class="mono" style="white-space:nowrap">${fmtT(r.ts)}</td>` +
+      `<td><span class="rulechip">${esc(r.category)}</span></td>` +
+      `<td>${chip(r.severity)}</td>` +
+      `<td style="font-size:12.5px">${esc(r.trigger || "")}</td>` +
+      `<td class="mono">${esc(r.action || "")}</td>` +
+      `<td class="${rz[r.result] || ""}">${esc(r.result || "")}</td>` +
+      `<td style="font-size:12px;color:var(--ink2)">${esc(r.detail || "")}${r.snapshot ? ` <span class="tag" title="${esc(r.snapshot)}">📸 snapshot</span>` : ""}</td></tr>`).join("");
+    $("view").innerHTML =
+      `<div class="card">
+        <div class="cardhead"><h2>Host self-heal &amp; hang watch</h2>
+          <span class="tag">${d.enabled ? "watching" : "off"}</span>
+          <span class="tag">${d.snapshot ? "snapshots on" : "snapshots off"}</span>
+          <span class="tag" style="${d.autofix ? "background:var(--warn,#b8860b);color:#fff" : ""}">${d.autofix ? "auto-fix ON" : "auto-fix off (detect-only)"}</span>
+          <div class="spacer"></div>
+          <button id="snapNow">Snapshot now</button></div>
+        <div class="sethelp">Watches the kernel log + resources for anything that precedes a hang (IOMMU/MCE/lockups/OOM/storage/thermal/disk/memory). On a high-severity precursor it captures a forensic snapshot so a freeze isn't a black hole. Hardware faults get an <b>advisory</b>; safe fixes (disk/failed-units) run only if you enable <span class="mono">kernwatch.autofix</span>. <span id="snapMsg"></span></div>
+        <div class="tablewrap"><table>
+          <thead><tr><th>Time</th><th>Category</th><th>Sev</th><th>Trigger</th><th>Action</th><th>Result</th><th>Detail</th></tr></thead>
+          <tbody>${rows || `<tr><td colspan="7" class="empty">Nothing detected — no hang-precursors or faults recorded. 🎉</td></tr>`}</tbody>
+        </table></div>
+      </div>`;
+    $("snapNow").addEventListener("click", async () => {
+      $("snapNow").disabled = true; $("snapMsg").textContent = "capturing…";
+      const r = await jpost("api/remediations/snapshot", {});
+      $("snapNow").disabled = false;
+      $("snapMsg").innerHTML = r.ok ? `<span class="msg-ok">saved ${esc(r.path)}</span>` : `<span class="msg-err">failed</span>`;
+    });
+  },
+};
+
 /* ---------- log sources ---------- */
 VIEWS.sources = {
   title: "Log sources",

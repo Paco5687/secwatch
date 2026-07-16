@@ -3,6 +3,24 @@
 Notable changes per release. secwatch is pre-1.0; only the latest release gets
 security fixes. Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.11.0]
+
+### Added
+- **Host hang/crash early-warning + self-heal (kernwatch).** Watches the kernel log
+  for *any* fault class that precedes an unresponsive hang — IOMMU/DMA (`AMD-Vi`),
+  MCE/EDAC, soft/hard lockups, rcu stalls, OOM, storage/nvme/ata errors, PCIe AER,
+  thermal, NIC hangs, oops — plus resource precursors (root fs near-full, RAM
+  exhaustion, runaway load with stuck-I/O procs, dangerous temps). Because a hard
+  freeze can't be repaired live, the key action is a **forensic snapshot** captured
+  the instant a high-severity precursor appears (top procs, D-state list, dmesg,
+  temps, failed units) — so the next hang leaves a file instead of a black hole.
+  Safe **auto-remediations** (disk cleanup, restart failed units) are **opt-in**
+  (`kernwatch.autofix`, off by default); hardware faults get an **advisory** with the
+  recommended fix. Everything — trigger, action, and a *did-it-resolve* re-check — is
+  written to a `remediations` audit table and shown in a new **Self-heal** dashboard
+  view (`/api/remediations`, `POST /api/remediations/snapshot`). Detection + snapshots
+  on by default. Directly motivated by the real `AMD-Vi` freeze this platform hit.
+
 ## [0.10.1]
 
 ### Added

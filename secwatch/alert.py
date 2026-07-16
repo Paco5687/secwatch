@@ -61,6 +61,19 @@ RULE_TITLE = {
     "docker_image": "Container image changed",
     "docker_restart_loop": "Container restart loop",
     "unit_failed": "Systemd unit failed",
+    "kern_iommu": "IOMMU/DMA fault (hang risk)",
+    "kern_mce": "CPU/memory machine-check error",
+    "kern_lockup": "Kernel soft/hard lockup or hung task",
+    "kern_oops": "Kernel bug/oops",
+    "kern_oom": "Out-of-memory kill",
+    "kern_storage": "Storage/filesystem error",
+    "kern_pcie": "PCIe bus error",
+    "kern_thermal": "Thermal event (overheating)",
+    "kern_network": "NIC hardware hang",
+    "kern_memory": "Memory allocation failure",
+    "kern_disk_full": "Root filesystem near-full (hang risk)",
+    "kern_mem_pressure": "RAM exhaustion (hang risk)",
+    "kern_io_stall": "Stuck I/O / runaway load (hang risk)",
 }
 
 
