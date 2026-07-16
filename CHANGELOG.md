@@ -11,11 +11,13 @@ security fixes. Format loosely follows [Keep a Changelog](https://keepachangelog
   / Light). Captured from `--demo`, so entirely synthetic.
 
 ### Fixed
-- **Demo mode never touches the live host.** `python -m secwatch.demo` started the full
-  app, so the host collectors ran against the real box and could write real events
-  (operator IP, hostnames, process cmdlines) into the demo DB. Demo now forces
-  `MODE=core` (no host collectors) and starts from a fresh DB — strictly the seeded
-  synthetic dataset.
+- **Demo mode is fully isolated from the live host.** `python -m secwatch.demo` started
+  the full app, so it (a) ran the host collectors against the real box — writing real
+  events (operator IP, hostnames, process cmdlines) into the demo DB — and (b) drove
+  the real ban actuator, overwriting the live Traefik ban file with its seeded synthetic
+  bans. Demo now forces `MODE=core` (no host collectors), `BAN_ACTUATOR=none` +
+  `AUTOBAN=false` (never touches a real ban file), and starts from a fresh DB — strictly
+  the seeded synthetic dataset.
 
 ## [0.11.1]
 

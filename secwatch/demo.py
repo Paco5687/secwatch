@@ -104,6 +104,8 @@ def main():
     config.MODE = "core"             # CRITICAL: no host collectors (ssh/process/host/
                                      # kern watchers) — they'd write REAL host events
                                      # (your IP, hostnames) into the demo DB.
+    config.BAN_ACTUATOR = "none"     # CRITICAL: never write the real Traefik/nftables
+    config.AUTOBAN = False           # ban file — the seeded demo bans would clobber it.
     try:
         config.DB_PATH.unlink()      # fresh DB each run so nothing real lingers
     except OSError:
