@@ -3,7 +3,7 @@
 Notable changes per release. secwatch is pre-1.0; only the latest release gets
 security fixes. Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
-## [0.11.2]
+## [0.11.3]
 
 ### Added
 - **Dashboard screenshots in the README** — hero overview + a "look inside" gallery
