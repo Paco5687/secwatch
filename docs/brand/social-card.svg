@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" width="1280" height="640" role="img" aria-label="secwatch — self-hosted security monitor">
+  <rect width="1280" height="640" fill="#0a1420"/>
+  <path d="M0 486 H150 l70 0 l26 -150 l40 250 l30 -170 H520 l40 90 l40 -150 l34 120 H860 l30 -80 l44 150 l30 -110 H1280" fill="none" stroke="#22d3ee" stroke-width="2.5" opacity="0.10" stroke-linecap="round" stroke-linejoin="round"/>
+  <g transform="translate(300,192)">
+    <g transform="scale(2.55)">
+      <path d="M24 4 L41 10 V24 C41 34 33 41 24 45 C15 41 7 34 7 24 V10 Z" fill="#0c1a2b" stroke="#22d3ee" stroke-width="2" stroke-linejoin="round"/>
+      <path d="M13 26 h6 l3 -8 l4 15 l3 -10 h4" fill="none" stroke="#22d3ee" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+  </g>
+  <text x="452" y="300" font-family="ui-monospace, SFMono-Regular, Menlo, 'DejaVu Sans Mono', monospace" font-size="104" font-weight="700" letter-spacing="-4" fill="#e8f0f7">secwatch<tspan fill="#22d3ee">_</tspan></text>
+  <text x="640" y="400" text-anchor="middle" font-family="ui-sans-serif, system-ui, 'DejaVu Sans', sans-serif" font-size="34" fill="#cbd5e1">The all-in-one security monitor for your self-hosted server</text>
+  <text x="640" y="462" text-anchor="middle" font-family="ui-monospace, Menlo, 'DejaVu Sans Mono', monospace" font-size="24" letter-spacing="0.5" fill="#22d3ee">edge detection · auto-ban · host EDR · CVE · fleet cluster</text>
+  <text x="640" y="560" text-anchor="middle" font-family="ui-monospace, Menlo, 'DejaVu Sans Mono', monospace" font-size="22" fill="#64748b">github.com/Paco5687/secwatch</text>
+</svg>
