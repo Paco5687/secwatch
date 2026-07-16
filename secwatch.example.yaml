@@ -52,6 +52,9 @@ log_source:
 proxy:
   traefik_container: traefik
   traefik_dynamic_dir: /srv/YOUR_APP/infra/traefik/dynamic
+  # secwatch rewrites this file on every ban change (it carries a "managed by
+  # secwatch — do not edit" header). If your proxy config dir is under git, add
+  # `secwatch-*.yml` to that repo's .gitignore so the churn doesn't fill your history.
   bans_file: /srv/YOUR_APP/infra/traefik/dynamic/secwatch-bans.yml
 
 # Cluster (P2P fleet, optional) — join several secwatch nodes so they gossip

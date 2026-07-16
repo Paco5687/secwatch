@@ -15,7 +15,8 @@ from . import config
 
 log = logging.getLogger("secwatch.ban.actuator")
 
-_HEADER = "# Managed by secwatch — do not edit by hand.\n"
+_HEADER = ("# Managed by secwatch — do not edit by hand (rewritten on each ban change).\n"
+           "# If this directory is version-controlled, add secwatch-*.yml to .gitignore.\n")
 
 _TRAEFIK_EMPTY = _HEADER + """\
 http:

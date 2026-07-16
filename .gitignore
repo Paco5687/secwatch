@@ -8,8 +8,9 @@ logs/
 *.db-shm
 __pycache__/
 *.pyc
-# host-specific live config (once Phase 1 lands, real values live here, not in code)
+# host-specific live config — real values (incl. the password hash) live here
 secwatch.yaml
+*.bak
 .secwatch-canary-*
 secwatch.service
 .uv/

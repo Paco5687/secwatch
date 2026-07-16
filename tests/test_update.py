@@ -95,7 +95,10 @@ def _tagged_origin_and_clone(tmp_path, sign=False):
     (origin / "secwatch" / "__init__.py").write_text('__version__ = "1.1.0"\n')
     _git(origin, "add", "-A")
     _git(origin, "commit", "-qm", "v2")
-    _git(origin, "tag", "-a", "v1.1.0", "-m", "release")   # unsigned annotated tag
+    # --no-sign keeps this hermetic: the test must produce an *unsigned* tag even
+    # when the host's global git config sets tag.gpgsign=true (and in CI, where
+    # there's no signing key at all).
+    _git(origin, "tag", "--no-sign", "-a", "v1.1.0", "-m", "release")
     return origin, clone
 
 

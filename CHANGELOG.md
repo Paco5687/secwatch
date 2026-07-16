@@ -3,6 +3,21 @@
 Notable changes per release. secwatch is pre-1.0; only the latest release gets
 security fixes. Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.11.6]
+
+### Changed
+- **Repo hygiene for your infra.** secwatch writes a machine-managed ban file into
+  your proxy's config dir; if that dir is a git repo, the per-ban rewrites would
+  churn your history. The managed-file header now points to the fix (gitignore
+  `secwatch-*.yml`), `secwatch.example.yaml` and the README document it, and
+  secwatch's own runtime state stays under the already-gitignored `data/` so a
+  clone-and-run never stages secrets. `.gitignore` also now covers `*.bak`.
+
+### Fixed
+- **Hermetic update tests.** `test_update.py` now forces `--no-sign` on its fixture
+  tag, so the signature-refusal test stays correct when the host sets
+  `tag.gpgsign=true` globally and passes in CI where there's no signing key.
+
 ## [0.11.5]
 
 ### Added

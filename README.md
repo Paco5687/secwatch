@@ -169,6 +169,14 @@ toggles) — most apply live, secrets are stored encrypted at rest, and it layer
 over `secwatch.yaml` (env vars still win). Security-critical settings (trusted
 networks, ban actuator, dashboard auth) stay YAML-only by design.
 
+> **Version-controlling your infra?** secwatch writes a machine-managed ban file
+> (`secwatch-bans.yml`) into your proxy's config dir and rewrites it on every ban
+> change (it's stamped with a "managed by secwatch — do not edit" header). If that
+> directory is a git repo, add `secwatch-*.yml` to its `.gitignore` so the ban churn
+> doesn't flood your history. secwatch's own runtime state (DB, secrets, snapshots)
+> all lives under `data/`, which is already gitignored — so a clone-and-run never
+> stages your secrets.
+
 ## Alerting
 
 Point secwatch at a **Discord webhook** to get pushed high-severity alerts. Keep
