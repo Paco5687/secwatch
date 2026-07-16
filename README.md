@@ -11,6 +11,10 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT"></a>
 </p>
 
+<p align="center">
+  <img src="docs/screenshots/overview.png" alt="secwatch dashboard — overview" width="860">
+</p>
+
 ---
 
 secwatch watches your reverse proxy's access log **and your internal apps' logs**,
@@ -72,6 +76,23 @@ mitigation *aid*, not a firewall or a patch manager.
 - **Self-contained dashboard** with a built-in login for direct `IP:PORT` use, and
   alerting to Discord, **ntfy, Gotify, Telegram, or a generic webhook** (any number
   of targets; test them from Settings).
+
+## A look inside
+
+<table>
+<tr>
+<td width="33%"><a href="docs/screenshots/events-drilldown.png"><img src="docs/screenshots/events-drilldown.png" alt="IP drill-down — why an IP was banned"></a><br><sub><b>Every ban explained</b> — the evidence trail, the source, and one-click unban / allowlist / mute.</sub></td>
+<td width="33%"><a href="docs/screenshots/vulnerabilities.png"><img src="docs/screenshots/vulnerabilities.png" alt="CVE findings with CISA-KEV flag"></a><br><sub><b>CVE awareness</b> — fixable HIGH/CRITICAL, actively-exploited (CISA-KEV) surfaced first.</sub></td>
+<td width="33%"><a href="docs/screenshots/settings.png"><img src="docs/screenshots/settings.png" alt="in-app settings"></a><br><sub><b>Configure in-app</b> — updates, alert targets, and suppression, no YAML required.</sub></td>
+</tr>
+</table>
+
+**Themeable** — the Ops theme above, plus Terminal and Light:
+
+<p align="center">
+  <img src="docs/screenshots/theme-terminal.png" alt="Terminal theme" width="415">
+  <img src="docs/screenshots/theme-light.png" alt="Light theme" width="415">
+</p>
 
 ## Quick start
 

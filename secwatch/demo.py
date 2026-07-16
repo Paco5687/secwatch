@@ -101,6 +101,13 @@ def main():
     config.CROWD_ENABLED = False     # keep the demo to exactly the seeded data —
     config.CLUSTER_ENABLED = False   # no live crowd pulls / cluster gossip mixing in
     config.LOG_SOURCES = []          # never tail a real access log in demo mode
+    config.MODE = "core"             # CRITICAL: no host collectors (ssh/process/host/
+                                     # kern watchers) — they'd write REAL host events
+                                     # (your IP, hostnames) into the demo DB.
+    try:
+        config.DB_PATH.unlink()      # fresh DB each run so nothing real lingers
+    except OSError:
+        pass
     conn = db.connect()
     counts = seed(conn)
     conn.close()

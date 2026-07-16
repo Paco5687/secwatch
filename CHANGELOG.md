@@ -3,6 +3,20 @@
 Notable changes per release. secwatch is pre-1.0; only the latest release gets
 security fixes. Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.11.2]
+
+### Added
+- **Dashboard screenshots in the README** — hero overview + a "look inside" gallery
+  (ban explainability, CVE/KEV, in-app settings) and the three themes (Ops / Terminal
+  / Light). Captured from `--demo`, so entirely synthetic.
+
+### Fixed
+- **Demo mode never touches the live host.** `python -m secwatch.demo` started the full
+  app, so the host collectors ran against the real box and could write real events
+  (operator IP, hostnames, process cmdlines) into the demo DB. Demo now forces
+  `MODE=core` (no host collectors) and starts from a fresh DB — strictly the seeded
+  synthetic dataset.
+
 ## [0.11.1]
 
 ### Security
