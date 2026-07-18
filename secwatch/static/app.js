@@ -989,6 +989,14 @@ VIEWS.settings = {
         in secwatch.yaml — see the docs.</div>
       <div id="alertTestOut" style="margin-top:6px"></div></div>`;
     html += `<div class="card" style="margin-bottom:12px">
+      <div class="cardhead"><h2>Fire drill</h2><div class="spacer"></div>
+        <button id="fireDrill">Run fire drill</button></div>
+      <div class="sethelp">Proves the pipeline works <b>right now</b>: injects a synthetic attack
+        (TEST-NET <span class="mono">203.0.113.7</span>, never a real host) and walks the real
+        detect → ban → enforce → restore chain. Adds and removes the test ban; your live ban list is
+        left byte-for-byte unchanged.</div>
+      <div id="fireDrillOut" style="margin-top:6px"></div></div>`;
+    html += `<div class="card" style="margin-bottom:12px">
       <div class="cardhead"><h2>Suppression</h2></div>
       <div class="sethelp">Never-ban <b>allowlist</b> (IPs) and muted <b>alert</b> types — created from the Events / IP drill-down. Remove an entry to re-enable it.</div>
       <div id="supprBody" style="margin-top:6px"><div class="sethelp">loading…</div></div></div>`;
@@ -1011,6 +1019,17 @@ VIEWS.settings = {
       $("alertTestOut").innerHTML = (r.results || []).map(x =>
         `<div class="checkrow"><span class="cname">${esc(x.type)}</span>
           <span class="cmsg">${x.ok ? '<span class="msg-ok">✓ ' + esc(x.msg) + '</span>' : '<span class="msg-err">✗ ' + esc(x.msg) + '</span>'}</span></div>`).join("");
+    });
+    $("fireDrill").addEventListener("click", async () => {
+      $("fireDrill").disabled = true; $("fireDrillOut").textContent = "Running drill…";
+      const r = await jpost("api/selftest/firedrill", {});
+      $("fireDrill").disabled = false;
+      const head = `<div class="checkrow"><span class="cname">result</span><span class="cmsg">${
+        r.ok ? '<span class="msg-ok">✓ GREEN — pipeline verified</span>'
+             : '<span class="msg-err">✗ RED — see stages below</span>'} <span class="mono">${r.ms}ms · ${esc(r.actuator||"")}</span></span></div>`;
+      $("fireDrillOut").innerHTML = head + (r.stages || []).map(s =>
+        `<div class="checkrow"><span class="cname">${esc(s.stage)}</span>
+          <span class="cmsg">${s.ok ? '<span class="msg-ok">✓ ' : '<span class="msg-err">✗ '}${esc(s.detail)}</span> <span class="mono">${s.ms}ms</span></span></div>`).join("");
     });
 
     const dirty = new Set();

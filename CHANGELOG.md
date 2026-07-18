@@ -3,6 +3,24 @@
 Notable changes per release. secwatch is pre-1.0; only the latest release gets
 security fixes. Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.12.0]
+
+### Added
+- **Dead-man's-switch (outbound heartbeat).** secwatch's own alerts can't fire if
+  secwatch is *dead* (crash, hung box, pulled power). So it now pings an external
+  monitor on an interval and lets the monitor alert on the ABSENCE of that ping —
+  the inversion that actually catches a dead process. Point `monitoring.heartbeat_url`
+  at an Uptime Kuma "Push" monitor or a healthchecks.io check. Healthy cycles ping
+  `status=up`; a degraded self-check pings `status=down` (naming the broken check),
+  so it also catches *alive-but-broken*. Off unless a URL is set. (`heartbeat.py`)
+- **Fire-drill self-test.** A "Run fire drill" button (Settings) + `POST
+  /api/selftest/firedrill` that exercises the real detect → enforce → restore chain
+  on demand and reports each stage green/red — proof the pipeline works *right now*
+  instead of hope. Injects a synthetic attack from TEST-NET `203.0.113.7` (RFC 5737,
+  never a real host), confirms it reaches the edge and that live Traefik is up, then
+  restores enforcement **byte-for-byte** — a self-test leaves zero footprint. Cleanup
+  runs even if a stage raises. (`selftest.py`)
+
 ## [0.11.6]
 
 ### Changed

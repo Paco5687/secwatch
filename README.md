@@ -195,6 +195,38 @@ that matter. Those still ban + show on the dashboard; tune what's quiet with
 `alerting.quiet_rules` (a probe from an internal IP still alerts). Full details in
 the [Wiki](https://github.com/Paco5687/secwatch/wiki/Alerting).
 
+## Is it still working? (watchdog + fire-drill)
+
+A monitor you can't trust is worse than none. Two features close that gap:
+
+**Dead-man's-switch.** secwatch's own alerts can't fire if secwatch is *dead*
+(crash, hung box, pulled power). So it pings an external monitor on an interval and
+lets the monitor alert on the **absence** of that ping. Wire it to
+[Uptime Kuma](https://github.com/louislam/uptime-kuma) in a minute:
+
+1. Kuma → **Add New Monitor** → Monitor Type: **Push**.
+2. Set **Heartbeat Interval** a bit longer than secwatch's (e.g. secwatch pings
+   every 60s → set Kuma to 120s) so a slow ping isn't a false alarm.
+3. Copy the **Push URL** Kuma shows (`http://kuma:3001/api/push/<token>`), and add
+   a notification (Discord, etc.) to that monitor.
+4. Put the URL in secwatch and restart:
+   ```yaml
+   monitoring:
+     heartbeat_url: "http://kuma:3001/api/push/<token>"
+     heartbeat_interval: 60
+   ```
+
+Healthy cycles ping `status=up`; a degraded self-check pings `status=down` and
+names the broken check — so Kuma also catches *alive-but-broken*, not just dead.
+Works the same with healthchecks.io or any dead-man's-switch service.
+
+**Fire-drill.** Settings → **Run fire drill** (or `POST /api/selftest/firedrill`)
+exercises the real detect → ban → enforce → restore chain on demand and reports
+each stage green/red — proof the pipeline works *right now*, not in theory. It
+injects a synthetic attack from TEST-NET `203.0.113.7` (never a real host),
+confirms the ban reaches the edge and the proxy is up, then restores your ban list
+**byte-for-byte**. Zero footprint, even if a stage fails.
+
 ## Cluster (fleet)
 
 Run secwatch on several boxes and join them into a **peer-to-peer cluster** — no

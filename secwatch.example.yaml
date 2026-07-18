@@ -247,6 +247,22 @@ alerting:
   # (something inside your network probing = worth knowing immediately).
   quiet_except_private: true
 
+# Dead-man's-switch. secwatch's own alerts can't fire if secwatch is *dead* (crash,
+# hung box, pulled power). Fix: it pings an EXTERNAL monitor on an interval, and the
+# monitor alerts on the ABSENCE of that ping. Healthy cycles ping ?status=up; a
+# degraded self-check pings ?status=down (naming the broken check). Empty = disabled.
+#
+# Uptime Kuma setup (≈1 min):
+#   1. Kuma → Add New Monitor → Monitor Type: "Push"
+#   2. Heartbeat Interval: a bit longer than heartbeat_interval below (e.g. 120 vs 60),
+#      so one slow ping isn't a false down. Add a notification (Discord, etc.).
+#   3. Copy the "Push URL" it shows and paste it into heartbeat_url. Restart secwatch.
+# (healthchecks.io works too: use its ping URL as heartbeat_url, and .../fail as fail.)
+monitoring:
+  heartbeat_url: ""            # e.g. http://kuma.lan:3001/api/push/AbCdEf123
+  # heartbeat_fail_url: ""     # optional; used on degraded (e.g. https://hc-ping.com/UUID/fail)
+  heartbeat_interval: 60       # seconds between pings (set the monitor's grace period higher)
+
 known_legitimate_endpoints:
   - host: ops.example.com
     path_prefix: /integrations/ebay/marketplace-account-deletion

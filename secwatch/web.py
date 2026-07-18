@@ -16,8 +16,8 @@ from fastapi.staticfiles import StaticFiles
 
 from . import (__version__, auth, auditwatch, authwatch, ban, cluster,
                config, cvewatch, db, detect, dockerwatch, fimwatch, healthwatch,
-               hostwatch, kernwatch, llm_analysis, logsources, metrics, notifiers,
-               parser, procwatch, tailer, update)
+               heartbeat, hostwatch, kernwatch, llm_analysis, logsources, metrics,
+               notifiers, parser, procwatch, tailer, update)
 
 log = logging.getLogger("secwatch.web")
 
@@ -339,6 +339,8 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(leaf_forward_task(), name="cluster_leaf"),
         asyncio.create_task(update_task(), name="update"),
     ]
+    if config.HEARTBEAT_URL:  # dead-man's-switch — only if the user configured a monitor
+        tasks.append(asyncio.create_task(heartbeat.Heartbeat().run(), name="heartbeat"))
     if config.MODE == "all":
         tasks += [
             asyncio.create_task(authwatch.AuthWatcher(engine, conn).run(), name="auth"),
@@ -1484,6 +1486,19 @@ def api_health():
 @app.get("/healthz")
 def healthz():
     return {"ok": True}
+
+
+@app.post("/api/selftest/firedrill")
+async def selftest_firedrill():
+    """Fire-drill: exercise the real detect → enforce → restore chain end-to-end
+    with a synthetic TEST-NET ban and report each stage. Powers the 'Run fire
+    drill' button. Safe by construction — see selftest.py."""
+    from . import selftest
+    conn = db.connect()
+    try:
+        return await asyncio.to_thread(selftest.run_firedrill, conn)
+    finally:
+        conn.close()
 
 
 # ---- static SPA (secwatch/static/) ---------------------------------------

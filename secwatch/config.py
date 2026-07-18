@@ -494,6 +494,13 @@ UPDATE_CHECK = _bool("SECWATCH_UPDATE_CHECK", "maintenance.update_check", True)
 UPDATE_VERSION_URL = _s(None, "maintenance.version_url",
     "https://raw.githubusercontent.com/Paco5687/secwatch/main/secwatch/__init__.py")
 
+# ---- dead-man's-switch (outbound heartbeat to an external monitor) -------
+# Point at an Uptime Kuma "push" monitor, healthchecks.io, or any service that
+# alerts on the ABSENCE of a ping. Empty = feature off. See heartbeat.py.
+HEARTBEAT_URL = _s("SECWATCH_HEARTBEAT_URL", "monitoring.heartbeat_url", "")
+HEARTBEAT_FAIL_URL = _s("SECWATCH_HEARTBEAT_FAIL_URL", "monitoring.heartbeat_fail_url", "")
+HEARTBEAT_INTERVAL = int(_s("SECWATCH_HEARTBEAT_INTERVAL", "monitoring.heartbeat_interval", 60))
+
 # ---- Traefik-integrity failsafes (generic) ------------------------------
 LOG_SILENCE_ALERT_SECS = int(os.environ.get("SECWATCH_LOG_SILENCE_SECS", "900"))
 
